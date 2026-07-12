@@ -34,8 +34,13 @@
 - GitHub Actions Lint 워크플로 (`.github/workflows/lint.yml`) — shellcheck+yamllint
 - `.gitattributes` (라인엔딩 정규화), `.yamllint.yml`
 - Build & Test 파이프라인 스켈레톤 — 임시 FastAPI 샘플(`ci_sandbox/`)로 검증 완료
+- **(2026-07-12 PR #1 병합)** `Dockerfile`/`.dockerignore`, `infra/sonarqube/` 자체 호스팅 compose,
+  self-hosted job 분리된 `build-test.yml` — 아래 3번 섹션 전체가 실제로 main에 들어감
+- **(2026-07-12 PR #2 병합)** `build-test.yml`의 Harbor 이미지 경로를 `zerocheck` → `dangdang`으로
+  수정, `sonar-project.properties` 추가
+- **(2026-07-12)** `.trivyignore`, `trivy-action`/`sonarqube-scan-action` 버전 수정 — 7번 섹션 참고
 
-## 3. 진행 중 — `Jhoon/ci-cd/harbor-push` 브랜치 (origin에 push됨)
+## 3. `Jhoon/ci-cd/harbor-push` 브랜치 — **PR #1로 main에 병합 완료(2026-07-12)**
 
 ### 커밋된 파일
 - `Dockerfile`, `.dockerignore` — `ci_sandbox` 앱 이미지 빌드용
@@ -161,6 +166,42 @@
 ## 6. 아직 하나도 안 건드린 것
 
 - Lane 2 (CD): `deploy trigger → docker pull → Docker Compose → SUCCESS/rollback`
-  (`Jhoon/ci-cd/docker-deploy-pipeline` 브랜치, main과 미동기화)
+  (`Jhoon/ci-cd/docker-deploy-pipeline` 브랜치 — **2026-07-12에 main으로 rebase는 완료함**, 실제
+  CD 로직은 아직 착수 전)
 - Rollback 커스텀 스크립트 (`Jhoon/ci-cd/rollback-config`)
 - `.env` 템플릿 + pydantic Settings 표준 코드 (`Jhoon/secops/pydantic-settings`, `env-gitignore-template`)
+
+## 7. CI 파이프라인 실제 실행 검증 (2026-07-12, 완료)
+
+Harbor 복구가 끝난 뒤 "인프라는 다 세팅했는데 파이프라인이 실제로 한 번도 끝까지 실행된 적이 없다"는
+걸 깨닫고 진행. `build-test.yml`의 `code-scanning`/`image-scanning`/`image-push`가 전부
+`runs-on: ubuntu-latest`(클라우드)에 `echo TODO`뿐인 껍데기였던 것도 이 과정에서 발견.
+
+### 발견·수정한 것 (전부 실측 기반)
+1. **`harbor-push` 브랜치가 실제로는 main에 병합된 적 없었음** — 문서엔 "완료됨"이라 적혀있었지만
+   `git log --all`로 확인해보니 `Dockerfile` 자체가 main에 없었음. → PR #1로 병합.
+2. **Harbor 이미지 경로가 `zerocheck`로 되어있었는데 실제 프로젝트명은 `dangdang`** → PR #2로 수정,
+   `sonar-project.properties`도 없어서 추가(SonarQube 프로젝트 `zerocheck` 신규 생성, private 전환).
+3. **레지스트리 TLS**: Harbor 인증서가 자체 CA(`HiZero Root CA`)로 서명됐고 SAN에
+   `harbor.hizero.local`(DNS)과 `192.168.0.53`(IP)만 있음, Tailscale IP는 SAN에 없어서 안 됨.
+   `/etc/hosts`에 이미 `harbor.hizero.local → 192.168.0.53` 매핑과 `/etc/docker/certs.d/harbor.hizero.local/ca.crt`가
+   준비되어 있어서 이 호스트명으로 통일해서 사용.
+4. **harbor VM에 `unzip` 미설치** → sonar-scanner 압축 해제 실패(exit 127) → `apt-get install unzip`.
+5. **`SONAR_TOKEN`이 빈 값으로 등록되어 있었음** (`gh secret set` 시 클립보드 붙여넣기가 실제로
+   안 됐던 것으로 추정) → 재등록으로 해결.
+6. **`aquasecurity/trivy-action@0.28.0` 태그가 존재하지 않음** → 실제 최신 태그 `v0.36.0`으로 수정
+   (GitHub API로 태그 목록 직접 확인).
+7. **`SonarSource/sonarqube-scan-action@v4`가 "지원 종료 + 보안 취약점 포함" 경고** → `v6`로 업그레이드.
+8. **Trivy가 `python:3.12-slim` 베이스 이미지에서 CRITICAL/HIGH CVE 9건 발견** (perl-base 등, 최신
+   이미지로 다시 받아도 동일 — 일부는 Debian이 `fix_deferred`로 패치를 미룬 상태라 `apt upgrade`로도
+   안 고쳐짐) → `.trivyignore`에 근거 주석과 함께 명시적 리스크 수용 (ci_sandbox 앱이 perl 등을
+   런타임에서 안 쓴다는 게 근거, 업계 표준 관행). **베이스 이미지가 바뀌면 이 파일 재검토 필요.**
+
+### 결과
+`build-test → code-scanning(SonarQube) → image-scanning(Docker build+Trivy) → image-push(Harbor)`
+전 구간 실제 성공 확인. Harbor `dangdang` 프로젝트에 `ci-sandbox` 이미지가 실제로 push된 것도
+API로 확인함(`artifact_count: 1`).
+
+### 참고 — 이번에 push는 main에 직접(‘ci: trigger…’ 류 빈 커밋 몇 개) 했음
+브랜치 전략상 원래는 PR 경유가 원칙인데, 파이프라인 트리거용 빈 커밋들은 편의상 main에 바로
+push했음. 다음 세션에서 이 패턴을 그대로 가져가도 될지, PR로 되돌릴지는 사용자 판단 필요.
