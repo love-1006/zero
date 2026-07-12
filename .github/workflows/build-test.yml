@@ -62,8 +62,56 @@ jobs:
       - name: Push image
         run: docker push ${{ env.IMAGE_NAME }}:${{ github.sha }}
 
+  deploy:
+    needs: image-push
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - name: Log in to Harbor
+        uses: docker/login-action@v3
+        with:
+          registry: harbor.hizero.local
+          username: ${{ secrets.HARBOR_ROBOT_USER }}
+          password: ${{ secrets.HARBOR_ROBOT_TOKEN }}
+      - name: Pull image
+        run: docker pull ${{ env.IMAGE_NAME }}:${{ github.sha }}
+      - name: Record previously deployed tag
+        run: |
+          mkdir -p ~/ci-sandbox-state
+          PREV_TAG=$(cat ~/ci-sandbox-state/last-good-tag 2>/dev/null || true)
+          echo "PREV_TAG=$PREV_TAG" >> "$GITHUB_ENV"
+          echo "Previous good tag: ${PREV_TAG:-<none>}"
+      - name: Deploy via Docker Compose
+        working-directory: infra/ci-sandbox
+        run: IMAGE_TAG=${{ github.sha }} docker compose up -d
+      - name: Health check
+        run: |
+          for i in $(seq 1 10); do
+            if curl -fs http://localhost:8080/health; then
+              echo "Health check passed"
+              exit 0
+            fi
+            echo "Health check attempt $i failed, retrying in 3s..."
+            sleep 3
+          done
+          echo "Health check failed after retries"
+          exit 1
+      - name: Rollback on failed health check
+        if: failure()
+        working-directory: infra/ci-sandbox
+        run: |
+          if [ -n "$PREV_TAG" ]; then
+            echo "Rolling back to previous good tag: $PREV_TAG"
+            IMAGE_TAG=$PREV_TAG docker compose up -d
+          else
+            echo "No previous good tag recorded - nothing to roll back to"
+          fi
+      - name: Record this deploy as last-good
+        if: success()
+        run: echo "${{ github.sha }}" > ~/ci-sandbox-state/last-good-tag
+
   notify-on-failure:
-    needs: [build-test, code-scanning, image-scanning, image-push]
+    needs: [build-test, code-scanning, image-scanning, image-push, deploy]
     if: failure()
     runs-on: ubuntu-latest
     steps:
