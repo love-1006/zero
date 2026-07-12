@@ -149,9 +149,12 @@
    최소 권한 원칙 위반으로 명시함. 완전한 해결책(Docker rootless mode)은 이미 떠있는 프로덕션급
    스택 재설치가 필요해 이 시점엔 과함. **원래 취지가 순수 편의였고 실무 표준에 안 맞는다는 근거를
    확인한 뒤, 사용자가 이 항목을 넘기기로 결정** — sudo(비밀번호 입력)는 그대로 유지.
-7. self-hosted GitHub Actions runner를 harbor VM에 설치 (GitHub 저장소 Settings → Actions →
-   Runners → New self-hosted runner에서 나오는 실행 시점 등록 토큰 사용, **systemd 서비스로
-   설치해서 재부팅 시 자동 기동되게 할 것**)
+7. ~~self-hosted GitHub Actions runner를 harbor VM에 설치~~ **완료(2026-07-12)** —
+   `~/actions-runner`에 v2.335.1 설치, 이름 `harbor-runner`, 라벨 `self-hosted,harbor`, 등록 토큰은
+   저장소 소유자(`love-1006`, Admin 권한)가 웹 UI에서 발급(러너 등록 API/UI는 Admin 권한 필요,
+   Write 권한으로는 403 — GitHub 공식 문서로 확인함). 공식 `svc.sh install/start`로 systemd 서비스
+   등록(`enabled`, bruce 계정으로 실행) → 재부팅 시 자동 기동됨. 워크플로에서 `runs-on: self-hosted`
+   또는 `runs-on: [self-hosted, harbor]`로 사용 가능.
 8. VM 쪽 별도 보안 항목(Claude Code 범위 밖, 여전히 미완료): bruce 계정 영구 비밀번호로 재변경
    (이번에 임시로 리셋한 값 말고 강한 값으로)
 
