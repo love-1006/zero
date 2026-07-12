@@ -1,0 +1,17 @@
+# python:3.12-slim(Debian) base image OS package CVEs.
+# Risk-accepted 2026-07-12: ci_sandbox is a FastAPI app that does not invoke
+# perl/gzip/acl/ncurses/util-linux at runtime - these are incidental base OS
+# packages, not part of our app's attack surface. Several are also
+# vendor "fix_deferred" (Debian has chosen not to patch yet), so no
+# upstream fix exists to pull in via apt upgrade.
+# Re-review this file whenever the Dockerfile base image changes.
+
+CVE-2025-69720
+CVE-2026-41992
+CVE-2026-42496
+CVE-2026-42497
+CVE-2026-48962
+CVE-2026-53615
+CVE-2026-54369
+CVE-2026-8376
+CVE-2026-9538
