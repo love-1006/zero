@@ -160,8 +160,11 @@
    Write 권한으로는 403 — GitHub 공식 문서로 확인함). 공식 `svc.sh install/start`로 systemd 서비스
    등록(`enabled`, bruce 계정으로 실행) → 재부팅 시 자동 기동됨. 워크플로에서 `runs-on: self-hosted`
    또는 `runs-on: [self-hosted, harbor]`로 사용 가능.
-8. VM 쪽 별도 보안 항목(Claude Code 범위 밖, 여전히 미완료): bruce 계정 영구 비밀번호로 재변경
-   (이번에 임시로 리셋한 값 말고 강한 값으로)
+8. ~~VM 쪽 별도 보안 항목: bruce 계정 영구 비밀번호로 재변경~~ **완료(2026-07-13), 변경 불필요로 종결**
+   — 팀 비밀번호 규칙(기본 `zeropass#`, 정책상 안 통과할 때만 `Zeropass#2026`)을 그대로 적용하기로
+   결정. 리눅스 계정 비밀번호는 별도 복잡도 정책이 없어 `zeropass#`가 그대로 통과하므로, 현재
+   설정값 자체가 이미 팀 규칙을 준수하는 "영구값"으로 확정됨. harbor VM, monitoring VM(103),
+   템플릿(harbor-template-v2, 108) 전부 동일하게 적용된 상태.
 
 ## 6. Lane 2 (CD) — **완료(2026-07-13), 실제 배포+롤백 실패 시나리오까지 실측 검증함**
 
