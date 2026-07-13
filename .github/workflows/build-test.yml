@@ -69,8 +69,12 @@ jobs:
       - name: Push image
         run: docker push ${{ env.IMAGE_NAME }}:${{ github.sha }}
 
+  # PR을 여는 것만으로 실제 서버에 배포되면 안 되므로, main에 push(=병합)된 경우에만 배포한다.
+  # github.event (객체)가 아니라 github.event_name (문자열)으로 비교해야 한다 - 공식 문서/이슈에서
+  # 확인된 흔한 실수 포인트(actions/runner#950).
   deploy:
     needs: image-push
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
