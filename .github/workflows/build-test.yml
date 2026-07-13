@@ -126,6 +126,13 @@ jobs:
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
-          curl -sf -X POST -H 'Content-type: application/json' \
-            --data "{\"text\": \":x: *Build & Test* failed on \`${{ github.ref_name }}\` (${{ github.sha }})\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|워크플로 보기>\"}" \
+          REPO_URL="${{ github.server_url }}/${{ github.repository }}"
+          RUN_URL="$REPO_URL/actions/runs/${{ github.run_id }}"
+          SHA="${{ github.sha }}"
+          BRANCH="${{ github.ref_name }}"
+          TEXT=":x: *Build & Test* failed on \`$BRANCH\` ($SHA)"
+          TEXT="$TEXT\n<$RUN_URL|결과 보기>"
+          curl -sf -X POST \
+            -H 'Content-type: application/json' \
+            --data "{\"text\": \"$TEXT\"}" \
             "$SLACK_WEBHOOK_URL"
