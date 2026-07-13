@@ -1,0 +1,7 @@
+services:
+  ci-sandbox:
+    image: harbor.hizero.local/dangdang/ci-sandbox:${IMAGE_TAG}
+    container_name: ci-sandbox
+    ports:
+      - "8080:8000"
+    restart: unless-stopped
