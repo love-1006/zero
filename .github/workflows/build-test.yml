@@ -35,8 +35,6 @@ jobs:
     needs: build-test
     runs-on: self-hosted
     steps:
-      - name: Force failure (Slack alert test)
-        run: exit 1
       - uses: actions/checkout@v4
       - name: SonarQube scan
         uses: SonarSource/sonarqube-scan-action@v6
@@ -48,6 +46,8 @@ jobs:
     needs: code-scanning
     runs-on: self-hosted
     steps:
+      - name: Force failure (Slack alert test)
+        run: exit 1
       - uses: actions/checkout@v4
       - name: Build image
         run: docker build -t ${{ env.IMAGE_NAME }}:${{ github.sha }} .
