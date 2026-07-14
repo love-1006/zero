@@ -35,6 +35,15 @@ services:
       - "3200:3200"
     restart: unless-stopped
 
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.26.0
+    container_name: blackbox-exporter
+    volumes:
+      - ./config/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
+    ports:
+      - "9115:9115"
+    restart: unless-stopped
+
   alloy:
     image: grafana/alloy:v1.17.1
     container_name: alloy
@@ -62,6 +71,8 @@ services:
       - ./config/grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      # 알림에 포함되는 쿼리/Silence 링크가 노트북에서도 열리도록 Tailscale IP 기준으로 설정
+      GF_SERVER_ROOT_URL: http://100.110.81.51:3000/
     ports:
       - "3000:3000"
     depends_on:

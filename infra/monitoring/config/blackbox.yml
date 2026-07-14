@@ -1,0 +1,17 @@
+modules:
+  http_2xx:
+    prober: http
+    timeout: 5s
+    http:
+      valid_status_codes: []
+      method: GET
+
+  # Harbor 등 자체 서명(self-signed) 인증서를 쓰는 내부 서비스용 - TLS 검증 생략
+  http_2xx_insecure:
+    prober: http
+    timeout: 5s
+    http:
+      valid_status_codes: []
+      method: GET
+      tls_config:
+        insecure_skip_verify: true
