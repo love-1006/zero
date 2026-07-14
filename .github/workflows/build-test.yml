@@ -20,8 +20,6 @@ jobs:
   build-test:
     runs-on: ubuntu-latest
     steps:
-      - name: Force failure (Slack alert test)
-        run: exit 1
       - uses: actions/checkout@v4
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -37,6 +35,8 @@ jobs:
     needs: build-test
     runs-on: self-hosted
     steps:
+      - name: Force failure (Slack alert test)
+        run: exit 1
       - uses: actions/checkout@v4
       - name: SonarQube scan
         uses: SonarSource/sonarqube-scan-action@v6
