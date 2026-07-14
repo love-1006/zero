@@ -17,3 +17,37 @@ scrape_configs:
   - job_name: monitoring-vm
     static_configs:
       - targets: ["192.168.0.51:9100"]
+
+  # Blackbox 모니터링 - 내부 지표(node_exporter)가 아니라 외부 관점에서 실제 접속 가능
+  # 여부를 확인. HTTP 상태코드/응답시간/TLS 인증서 만료를 체크한다.
+  - job_name: blackbox-http
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - http://192.168.0.53:9000 # SonarQube
+          - http://192.168.0.51:3000/login # Grafana
+          - http://192.168.0.53:8080/health # ci_sandbox 앱
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  - job_name: blackbox-http-insecure
+    metrics_path: /probe
+    params:
+      module: [http_2xx_insecure]
+    static_configs:
+      - targets:
+          - https://192.168.0.53 # Harbor UI (자체 서명 인증서)
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
