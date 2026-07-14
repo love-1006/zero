@@ -143,11 +143,17 @@ jobs:
           BRANCH="${{ github.ref_name }}"
           FAILED_JOBS=""
           add_failed() {
-            if [ -z "$FAILED_JOBS" ]; then FAILED_JOBS="$1"; else FAILED_JOBS="$FAILED_JOBS, $1"; fi
+            if [ -z "$FAILED_JOBS" ]; then
+              FAILED_JOBS="$1"
+            else
+              FAILED_JOBS="$FAILED_JOBS, $1"
+            fi
           }
           [ "$BUILD_TEST_RESULT" = "failure" ] && add_failed "build-test"
           [ "$CODE_SCANNING_RESULT" = "failure" ] && add_failed "code-scanning"
-          [ "$IMAGE_SCANNING_RESULT" = "failure" ] && add_failed "image-scanning"
+          if [ "$IMAGE_SCANNING_RESULT" = "failure" ]; then
+            add_failed "image-scanning"
+          fi
           [ "$IMAGE_PUSH_RESULT" = "failure" ] && add_failed "image-push"
           [ "$DEPLOY_RESULT" = "failure" ] && add_failed "deploy"
           TEXT=":x: *${FAILED_JOBS^}* failed on \`$BRANCH\` ($SHA)"
