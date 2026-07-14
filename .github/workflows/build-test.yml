@@ -150,7 +150,7 @@ jobs:
           [ "$IMAGE_SCANNING_RESULT" = "failure" ] && add_failed "image-scanning"
           [ "$IMAGE_PUSH_RESULT" = "failure" ] && add_failed "image-push"
           [ "$DEPLOY_RESULT" = "failure" ] && add_failed "deploy"
-          TEXT=":x: *$FAILED_JOBS* failed on \`$BRANCH\` ($SHA)"
+          TEXT=":x: *${FAILED_JOBS^}* failed on \`$BRANCH\` ($SHA)"
           TEXT="$TEXT\n<$RUN_URL|결과 보기>"
           curl -sf -X POST \
             -H 'Content-type: application/json' \
