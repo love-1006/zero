@@ -1,0 +1,95 @@
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.database import get_db
+from app.models.recipe import Recipe
+from app.models.recipe_base_comparison import RecipeBaseComparison
+from app.models.recipe_ingredient import RecipeIngredient
+from app.services.recipe_store import (
+    RecipeNotFoundError,
+    get_base_comparisons,
+    get_ingredients,
+    get_recipe,
+    list_recipes,
+    recipe_exists,
+)
+
+router = APIRouter(prefix="/recipes")
+
+
+def _list_item(recipe: Recipe) -> dict[str, object]:
+    return {
+        "id": recipe.id,
+        "name": recipe.name,
+        "thumbnailUrl": recipe.thumbnail_url,
+        "sugarReductionPct": float(recipe.sugar_reduction_pct) if recipe.sugar_reduction_pct is not None else None,
+        "comparisonStatus": recipe.comparison_status,
+    }
+
+
+def _comparison_item(comparison: RecipeBaseComparison | None) -> dict[str, object] | None:
+    if comparison is None:
+        return None
+    return {
+        "baseType": comparison.base_type,
+        "baseName": comparison.base_name,
+        "baseFoodCode": comparison.base_food_code,
+        # base_products 테이블이 아직 없어서 조인 안 함 — 원시 id만 노출.
+        "baseProductId": comparison.base_product_id,
+        "baseSugarG": float(comparison.base_sugar_g) if comparison.base_sugar_g is not None else None,
+        "baseKcal": float(comparison.base_kcal) if comparison.base_kcal is not None else None,
+    }
+
+
+def _ingredient_item(ingredient: RecipeIngredient, comparison: RecipeBaseComparison | None) -> dict[str, object]:
+    return {
+        "id": ingredient.id,
+        "name": ingredient.name,
+        "amount": ingredient.amount,
+        "type": ingredient.ingredient_type,
+        "sugarG": float(ingredient.sugar_g) if ingredient.sugar_g is not None else None,
+        "kcal": float(ingredient.kcal) if ingredient.kcal is not None else None,
+        "baseComparison": _comparison_item(comparison),
+    }
+
+
+@router.get("")
+async def get_recipe_list(db: AsyncSession = Depends(get_db)) -> dict[str, object]:
+    recipes = await list_recipes(db)
+    return {"recipes": [_list_item(recipe) for recipe in recipes]}
+
+
+@router.get("/{recipe_id}")
+async def get_recipe_detail(recipe_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, object]:
+    try:
+        recipe = await get_recipe(db, recipe_id)
+    except RecipeNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+    ingredients = await get_ingredients(db, recipe_id)
+    comparisons = await get_base_comparisons(db, [i.id for i in ingredients])
+
+    return {
+        "id": recipe.id,
+        "name": recipe.name,
+        "thumbnailUrl": recipe.thumbnail_url,
+        "steps": recipe.steps,
+        "source": recipe.source,
+        "publishedAt": recipe.published_at.isoformat() if recipe.published_at else None,
+        "nutrition": {
+            "totalSugarG": float(recipe.total_sugar_g) if recipe.total_sugar_g is not None else None,
+            "totalKcal": float(recipe.total_kcal) if recipe.total_kcal is not None else None,
+            "baseSugarG": float(recipe.base_sugar_g) if recipe.base_sugar_g is not None else None,
+            "baseKcal": float(recipe.base_kcal) if recipe.base_kcal is not None else None,
+            "sugarReductionPct": float(recipe.sugar_reduction_pct) if recipe.sugar_reduction_pct is not None else None,
+            "comparisonStatus": recipe.comparison_status,
+        },
+        "ingredients": [_ingredient_item(ingredient, comparisons.get(ingredient.id)) for ingredient in ingredients],
+    }
+
+
+@router.get("/{recipe_id}/exists")
+async def check_recipe_exists(recipe_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, bool]:
+    # Diet/Main이 external_recipe_id(느슨한 참조)의 유효성을 확인할 때 쓰는
+    # 용도 — recipe-service.md 설계 메모 참고.
+    return {"exists": await recipe_exists(db, recipe_id)}
