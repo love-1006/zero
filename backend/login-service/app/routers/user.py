@@ -1,3 +1,4 @@
+import logging
 from datetime import date
 from typing import Annotated
 
@@ -15,6 +16,8 @@ from app.models.user import User
 from app.services import jwt_service, user_store
 from app.services.user_store import LastSocialAccountError, SocialAccountNotFoundError
 
+logger = logging.getLogger("app.user")
+
 router = APIRouter(prefix="/user")
 
 
@@ -29,6 +32,7 @@ def _decode_user_id_or_401(token: str) -> int:
     try:
         return jwt_service.decode_user_id(token)
     except pyjwt.InvalidTokenError as error:
+        logger.warning("user request denied: reason=invalid_token")
         raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다.") from error
 
 

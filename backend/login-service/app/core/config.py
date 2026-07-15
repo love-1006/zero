@@ -14,6 +14,16 @@ class Settings(BaseSettings):
     kakao_client_secret: str = ""
     kakao_redirect_uri: str = "http://localhost:8000/social-access/kakao/callback"
 
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_redirect_uri: str = "http://localhost:8000/social-access/google/callback"
+
+    # "Services ID" from the Apple Developer portal. Apple login additionally needs
+    # a Team ID / Key ID / private key to sign the client assertion JWT for the
+    # token exchange — not modeled yet, see app/services/oauth/apple.py.
+    apple_client_id: str = ""
+    apple_redirect_uri: str = "http://localhost:8000/social-access/apple/callback"
+
     jwt_secret: str = "dev-secret-change-me"
     jwt_expire_minutes: int = 60
 

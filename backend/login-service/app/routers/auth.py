@@ -1,3 +1,4 @@
+import logging
 from types import ModuleType
 from urllib.parse import urlencode
 
@@ -11,13 +12,18 @@ from app.core.config import settings
 from app.core.constants import SOCIAL_CODES
 from app.core.database import get_db
 from app.services import jwt_service, session_store, state_store, user_store
-from app.services.oauth import kakao, naver
+from app.services.oauth import apple, google, kakao, naver
 from app.services.oauth.types import OAuthExchangeError
 from app.services.user_store import SocialAccountAlreadyLinkedError
 
+logger = logging.getLogger("app.auth")
+
 router = APIRouter(prefix="/social-access")
 
-_PROVIDERS: dict[str, ModuleType] = {"naver": naver, "kakao": kakao}
+# google/apple are wired up but not functional yet — no OAuth client credentials
+# for either (Apple additionally needs a signed client-assertion JWT that isn't
+# implemented, see app/services/oauth/apple.py). Naver/Kakao are the real ones.
+_PROVIDERS: dict[str, ModuleType] = {"naver": naver, "kakao": kakao, "google": google, "apple": apple}
 
 
 def _get_provider_module(provider: str) -> ModuleType:
@@ -44,6 +50,7 @@ def activate_session(token: str) -> dict[str, str]:
     try:
         jwt_service.decode_user_id(token)
     except pyjwt.InvalidTokenError as error:
+        logger.warning("session activation denied: reason=invalid_token")
         raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다.") from error
 
     session_store.set_active_token(token)
@@ -55,11 +62,13 @@ def link(provider: str, token: str | None = None) -> RedirectResponse:
     module = _get_provider_module(provider)
     active_token = token or session_store.get_active_token()
     if active_token is None:
+        logger.warning("social link denied: reason=missing_active_session provider=%s", provider)
         raise HTTPException(status_code=401, detail="연동할 활성 세션 토큰이 없습니다. 먼저 로그인해주세요.")
 
     try:
         user_id = jwt_service.decode_user_id(active_token)
     except pyjwt.InvalidTokenError as error:
+        logger.warning("social link denied: reason=invalid_token provider=%s", provider)
         raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다.") from error
 
     state = state_store.create_state(link_user_id=user_id)
@@ -79,18 +88,29 @@ async def callback(
 
     state_entry = state_store.verify_and_consume_state(state)
     if state_entry is None:
+        logger.warning("social login denied: provider=%s reason=invalid_or_expired_state", provider)
         return _frontend_redirect(error="state 값이 유효하지 않거나 만료되었습니다.")
 
     if error is not None:
+        # error/error_description are attacker-controlled query params on our own
+        # callback URL — %r escapes them so they can't forge extra log lines.
+        logger.warning(
+            "social login denied: provider=%s reason=provider_error error=%r description=%r",
+            provider,
+            error,
+            error_description,
+        )
         return _frontend_redirect(error=f"{provider} 로그인이 취소되었거나 실패했습니다: {error_description or error}")
 
     if code is None:
+        logger.warning("social login denied: provider=%s reason=missing_code", provider)
         return _frontend_redirect(error="인증 코드가 전달되지 않았습니다.")
 
     try:
         access_token = await module.exchange_code_for_token(code, state)
         profile = await module.fetch_profile(access_token)
     except (httpx.HTTPError, OAuthExchangeError) as exchange_error:
+        logger.warning("social login denied: provider=%s reason=exchange_failed error=%r", provider, str(exchange_error))
         return _frontend_redirect(error=f"{provider} 로그인 요청이 실패했습니다: {exchange_error}")
 
     if state_entry.link_user_id is not None:
@@ -108,10 +128,18 @@ async def callback(
                 birthyear=profile.birthyear,
             )
         except SocialAccountAlreadyLinkedError as link_error:
+            logger.warning(
+                "social link denied: provider=%s user_id=%s reason=already_linked_elsewhere",
+                provider,
+                state_entry.link_user_id,
+            )
             return _frontend_redirect(error=str(link_error))
 
         token = jwt_service.create_access_token(user.id, provider, profile.nickname)
         session_store.set_active_token(token)
+        logger.info(
+            "social link success: provider=%s user_id=%s newly_linked=%s", provider, user.id, newly_linked
+        )
         return _frontend_redirect(
             social=SOCIAL_CODES[provider],
             linked=True,
@@ -132,6 +160,7 @@ async def callback(
     )
     token = jwt_service.create_access_token(user.id, provider, profile.nickname)
     session_store.set_active_token(token)
+    logger.info("social login success: provider=%s user_id=%s is_new=%s", provider, user.id, is_new)
 
     return _frontend_redirect(
         social=SOCIAL_CODES[provider],
