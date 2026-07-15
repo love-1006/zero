@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import SOCIAL_CODES
 from app.core.database import get_db
+from app.models.admin_account import AdminAccount
 from app.models.social_account import SocialAccount
 from app.models.user import User
 from app.services import jwt_service, user_store
@@ -80,6 +81,10 @@ async def get_mypage(usr: str, db: AsyncSession = Depends(get_db)) -> dict[str, 
     stmt = select(SocialAccount).where(SocialAccount.user_id == user_id)
     social_accounts = (await db.execute(stmt)).scalars().all()
     enabled_sns = [SOCIAL_CODES[account.provider] for account in social_accounts]
+
+    admin_account = await db.scalar(select(AdminAccount).where(AdminAccount.user_id == user_id))
+    if admin_account is not None:
+        enabled_sns.append(SOCIAL_CODES["admin"])
 
     return {
         "enabledSns": enabled_sns,

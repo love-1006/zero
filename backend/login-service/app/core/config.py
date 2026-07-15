@@ -8,16 +8,20 @@ class Settings(BaseSettings):
 
     naver_client_id: str = ""
     naver_client_secret: str = ""
-    naver_redirect_uri: str = "http://localhost:8000/auth/naver/callback"
+    naver_redirect_uri: str = "http://localhost:8000/social-access/naver/callback"
 
     kakao_client_id: str = ""
     kakao_client_secret: str = ""
-    kakao_redirect_uri: str = "http://localhost:8000/auth/kakao/callback"
+    kakao_redirect_uri: str = "http://localhost:8000/social-access/kakao/callback"
 
     jwt_secret: str = "dev-secret-change-me"
     jwt_expire_minutes: int = 60
 
     frontend_url: str = "http://localhost:3000"
+
+    turnstile_secret_key: str = ""
+
+    admin_signup_secret: str = ""
 
     postgres_host: str = "localhost"
     postgres_port: int = 5432

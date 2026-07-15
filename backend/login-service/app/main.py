@@ -7,8 +7,8 @@ logging.basicConfig(level=logging.INFO)
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.database import Base, engine
-from app.models import SocialAccount, User  # noqa: F401
-from app.routers import auth, health, items, user, webhooks
+from app.models import AdminAccount, SocialAccount, User  # noqa: F401
+from app.routers import admin_auth, auth, health, items, user, webhooks
 
 
 @asynccontextmanager
@@ -30,5 +30,6 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(items.router)
 app.include_router(auth.router)
+app.include_router(admin_auth.router)
 app.include_router(user.router)
 app.include_router(webhooks.router)

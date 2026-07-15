@@ -5,12 +5,13 @@ import jwt
 from app.core.config import settings
 
 
-def create_access_token(user_id: int, provider: str, nickname: str) -> str:
+def create_access_token(user_id: int, provider: str, nickname: str, role: str = "user") -> str:
     now = int(time.time())
     payload = {
         "sub": str(user_id),
         "provider": provider,
         "nickname": nickname,
+        "role": role,
         "iat": now,
         "exp": now + settings.jwt_expire_minutes * 60,
     }

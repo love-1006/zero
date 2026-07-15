@@ -15,7 +15,7 @@ from app.services.oauth import kakao, naver
 from app.services.oauth.types import OAuthExchangeError
 from app.services.user_store import SocialAccountAlreadyLinkedError
 
-router = APIRouter(prefix="/auth")
+router = APIRouter(prefix="/social-access")
 
 _PROVIDERS: dict[str, ModuleType] = {"naver": naver, "kakao": kakao}
 
