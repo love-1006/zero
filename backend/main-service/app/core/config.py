@@ -1,0 +1,32 @@
+from urllib.parse import quote_plus
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    # Must match login-service's JWT_SECRET — this service only verifies
+    # tokens issued by login-service, it never issues its own.
+    jwt_secret: str = "dev-secret-change-me"
+
+    frontend_url: str = "http://localhost:3000"
+
+    # Same Postgres instance as login-service. The `service` schema (and this
+    # service's own user_health_profiles/user_preferences tables within it) is
+    # provisioned and migrated by the data team — this app never runs DDL
+    # against it, only SELECT/INSERT/UPDATE/DELETE.
+    postgres_host: str = "localhost"
+    postgres_port: int = 5432
+    postgres_db: str = "test_db"
+    postgres_user: str = ""
+    postgres_password: str = ""
+
+    @property
+    def database_url(self) -> str:
+        user = quote_plus(self.postgres_user)
+        password = quote_plus(self.postgres_password)
+        return f"postgresql+asyncpg://{user}:{password}@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+
+
+settings = Settings()

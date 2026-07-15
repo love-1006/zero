@@ -9,7 +9,7 @@
 | `public.users` / `social_accounts` / `admin_accounts` | User/Auth (외부, 기존) | 이 저장소가 다루는 대상 아님. 모든 서비스는 JWT의 `user_id`(INTEGER)만 신뢰하고 읽는다 |
 | `service.products`, `service.product_tags` | **Product** | `product_tags`는 Product가 쓰기를 담당하되 `tag_id` 유효성은 Ingredients가 관리하는 `tags`를 참조 |
 | `service.tags` | **Ingredients** | CATEGORY/ALLERGEN/SWEETENER/HEALTH_LABEL 코드북. Product/Main/Community가 읽기 전용으로 참조 |
-| `service.user_health_profiles`, `service.user_preferences` | **Main** (잠정) | 아래 "열린 이슈" 참고 — 소유 서비스가 확정되지 않았다 |
+| `service.user_health_profiles`, `service.user_preferences` | **Main** | 로그인 유저가 입력한 건강/선호 정보를 기준으로 홈 화면 맞춤 정보(당/칼로리 게이지 등)를 내려줘야 하므로 Main이 소유 (2026-07-15 팀 결정) |
 | `service.meal_logs`, `service.meal_items`, view `service.v_meal_totals` | **Diet** | `meal_items.product_id`는 Product 데이터의 스냅샷 참조 |
 | `service.user_favorites` | Diet 또는 User 쪽 후보 (아래 참고) | `product_id`(Product)와 `external_recipe_id`(Recipe)를 동시에 참조하는 경계 테이블 |
 | 레시피 콘텐츠 (제목/재료/조리법 등) | **Recipe** | 이 DB에 테이블 없음 — Recipe Service가 자체 스토리지를 가져야 함 |
@@ -20,7 +20,7 @@
 
 ## 열린 이슈 (진행 전 팀 내 확인 필요)
 
-1. **`user_health_profiles`/`user_preferences`의 소유 서비스가 미정이다.** 7개 서비스 목록에 "User Service"가 없어서 잠정적으로 Main Service에 배정했다. 실제로는 별도 Profile/User 서비스를 만들거나 Main이 계속 갖는 것 중 팀 결정이 필요하다.
+1. ~~`user_health_profiles`/`user_preferences`의 소유 서비스가 미정이다.~~ **해결(2026-07-15): Main Service 소유로 확정.** 로그인 유저가 입력한 정보로 Main이 맞춤형 정보를 내려줘야 하기 때문.
 2. **`public.users`와 데이터가 중복될 수 있다.** 실제 `public.users`에 이미 `favorite_categories VARCHAR[]`, `is_allergic BOOLEAN`, `tall`, `weight` 컬럼이 있다 — `service.user_health_profiles`/`user_preferences`가 정규화해서 표현하려는 것과 같은 정보다. User/Auth 팀과 단일 진실 공급원을 정해야 한다. 자세한 내용은 `../09-schema-fix-log.md` 참고.
 3. **`user_favorites`의 소유가 애매하다.** 아래 각 서비스 문서에서 Diet Service가 잠정 소유하는 것으로 기술했지만, User 쪽에 두는 안도 가능하다.
 

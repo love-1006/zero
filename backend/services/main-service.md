@@ -1,11 +1,11 @@
 # Main Service (메인화면)
 
-## 소유 데이터 (잠정)
+## 소유 데이터
 
 - `service.user_health_profiles` (PK `user_id` INTEGER → `public.users(id)`)
 - `service.user_preferences` (PK `preference_id` UUID, FK `user_id` → `public.users(id)`, FK `tag_id` → `service.tags`)
 
-> **이 배정은 확정이 아니다.** 7개 서비스 목록에 별도 "User/Profile Service"가 없어서 잠정적으로 Main에 붙였다. 팀에서 별도 서비스로 뺄지 결정 필요 — `docs/services/README.md`의 "열린 이슈" 참고. 또한 실제 `public.users`에 이미 `favorite_categories`/`is_allergic`/`tall`/`weight` 컬럼이 있어 이 두 테이블과 데이터가 겹칠 수 있다 — User/Auth 팀과 조율 전에는 신중하게 접근.
+> **Main Service 소유로 확정 (2026-07-15 팀 결정).** 로그인 유저가 입력한 건강/선호 정보를 기준으로 Main이 홈 화면 맞춤형 정보(당/칼로리 게이지 등, MN-0106~0108)를 내려줘야 하기 때문. 다만 실제 `public.users`에 이미 `favorite_categories`/`is_allergic`/`tall`/`weight` 컬럼이 있어 이 두 테이블과 데이터가 겹칠 수 있다는 점은 여전히 남아있다 — User/Auth 팀과 조율 전에는 신중하게 접근.
 
 기본적으로 Main Service는 **자체 데이터를 최소화하고 다른 서비스를 조합하는 BFF**로 설계하는 게 맞다.
 
