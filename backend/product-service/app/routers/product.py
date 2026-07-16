@@ -16,7 +16,6 @@ from app.services.ai_service import (
 )
 from app.services.product_store import (
     ProductNotFoundError,
-    get_bulk_candidates,
     get_product,
     get_product_tags,
     get_sweetener_tags_for_product,
@@ -171,24 +170,21 @@ async def get_bulk_recommendation(
     id: str = Query(..., description="상품 UUID"),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, object]:
-    """PR-0305: 같은 카테고리 대용량 상품 추천."""
+    """PR-0305: 같은 카테고리 대용량 상품 추천.
+
+    실제 service.products 테이블에 대용량 구매 링크를 담을 컬럼이 없어서
+    (bulk_purchase_url 미존재) 준비 중 상태로 둔다 — 컬럼이 추가되면 구현.
+    """
     pid = _to_uuid(id)
     try:
         await get_product(db, pid)
     except ProductNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
-    candidates = await get_bulk_candidates(db, pid)
     return {
-        "list-products": [
-            {
-                "name": p.product_name,
-                "brand": p.brand_name,
-                "image": p.image_url,
-                "url": p.bulk_purchase_url or p.purchase_url,
-            }
-            for p in candidates
-        ]
+        "status": "PREPARING",
+        "message": "대용량 상품 추천 기능은 준비 중입니다. (service.products에 대용량 구매 링크 컬럼 필요)",
+        "list-products": [],
     }
 
 

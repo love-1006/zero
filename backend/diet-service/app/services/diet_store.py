@@ -25,7 +25,7 @@ async def create_meal_log(
     db: AsyncSession,
     *,
     user_id: int,
-    image_url: str,
+    image_object_key: str,
     meal_type: str = "SNACK",
     input_type: str = "VISION",
 ) -> MealLog:
@@ -34,7 +34,7 @@ async def create_meal_log(
         user_id=user_id,
         input_type=input_type,
         meal_type=meal_type,
-        image_url=image_url,
+        image_object_key=image_object_key,
         analysis_status="PENDING",
         eaten_at=datetime.now(timezone.utc),
         created_at=datetime.now(timezone.utc),
@@ -105,45 +105,54 @@ async def get_meal_items(db: AsyncSession, meal_log_id: uuid.UUID) -> list[MealI
     return list(result.scalars().all())
 
 
-def make_meal_item_from_product(meal_log_id: uuid.UUID, product: ProductRef) -> MealItem:
-    """Product 현재 값을 스냅샷으로 복제해 MealItem 생성."""
+def make_meal_item_from_product(
+    meal_log_id: uuid.UUID,
+    product: ProductRef,
+    serving_value: Decimal,
+    serving_unit: str,
+) -> MealItem:
+    """Product 현재 값을 스냅샷으로 복제해 MealItem 생성.
+
+    serving_value/serving_unit은 ProductRef(읽기전용 미러)가 안 갖고 있는 값이라
+    호출 측에서 넘겨받는다(예: 사용자가 선택한 섭취량).
+    """
     return MealItem(
         meal_item_id=uuid.uuid4(),
         meal_log_id=meal_log_id,
         product_id=product.product_id,
         item_name=product.product_name,
+        serving_value=serving_value,
+        serving_unit=serving_unit,
         calories=product.calories,
         sugars=product.sugars,
         carbohydrate=product.carbohydrate,
-        protein=product.protein,
-        fat=product.fat,
-        sodium=product.sodium,
     )
 
 
 def make_meal_item_from_analysis(
     meal_log_id: uuid.UUID,
     item_name: str,
-    calories: Decimal | None = None,
-    sugars: Decimal | None = None,
-    carbohydrate: Decimal | None = None,
-    protein: Decimal | None = None,
-    fat: Decimal | None = None,
-    sodium: Decimal | None = None,
-    raw_analysis: str | None = None,
+    serving_value: Decimal,
+    serving_unit: str,
+    calories: Decimal,
+    sugars: Decimal,
+    carbohydrate: Decimal,
 ) -> MealItem:
-    """AI/OCR 분석 결과로 MealItem 생성 (product_id 없음)."""
+    """AI/OCR 분석 결과로 MealItem 생성 (product_id 없음).
+
+    실제 service.meal_items에는 protein/fat/sodium/raw_analysis 컬럼이 없어서
+    분석 결과 중 이 값들은 저장하지 않는다 — RC-0103/0104 응답의 단백질/지방/
+    나트륨 필드는 항상 null이 된다(app/routers/diet.py의 _item_dict 참고).
+    """
     return MealItem(
         meal_item_id=uuid.uuid4(),
         meal_log_id=meal_log_id,
         item_name=item_name,
+        serving_value=serving_value,
+        serving_unit=serving_unit,
         calories=calories,
         sugars=sugars,
         carbohydrate=carbohydrate,
-        protein=protein,
-        fat=fat,
-        sodium=sodium,
-        raw_analysis=raw_analysis,
     )
 
 

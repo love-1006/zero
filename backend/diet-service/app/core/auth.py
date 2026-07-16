@@ -18,9 +18,10 @@ def get_current_user(usr: str = Query(..., description="JWT 토큰")) -> dict:
             algorithms=list(_ALLOWED_ALGORITHMS),
         )
     except jwt.ExpiredSignatureError:
-        logger.warning("auth: expired token usr=%r", usr)
+        # 토큰 값 자체는 절대 로그에 남기지 않는다 (민감정보 — ASVS V16.4.1).
+        logger.warning("auth: expired token")
         raise HTTPException(status_code=401, detail="토큰이 만료되었습니다.")
     except jwt.InvalidTokenError:
-        logger.warning("auth: invalid token usr=%r", usr)
+        logger.warning("auth: invalid token")
         raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다.")
     return payload

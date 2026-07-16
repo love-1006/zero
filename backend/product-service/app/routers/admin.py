@@ -27,14 +27,14 @@ class ProductCreateBody(BaseModel):
     brand: str | None = None
     category_tag_id: str
     ingredient_text: str | None = None
-    image_url: str | None = None
-    purchase_url: str | None = None
-    bulk_purchase_url: str | None = None
+    # 실제 DB에서 NOT NULL — 상품 생성 시 필수
+    image_url: str
+    purchase_url: str
+    calories: Decimal
+    sugars: Decimal
     commerce_product_id: str | None = None
-    # 영양성분 (선택, AD-0103과 통합 가능)
-    calories: Decimal | None = None
+    # 나머지 영양성분은 선택 (AD-0103에서 별도 등록/수정 가능)
     carbohydrate: Decimal | None = None
-    sugars: Decimal | None = None
     protein: Decimal | None = None
     fat: Decimal | None = None
     sodium: Decimal | None = None
@@ -47,7 +47,6 @@ class ProductUpdateBody(BaseModel):
     ingredient_text: str | None = None
     image_url: str | None = None
     purchase_url: str | None = None
-    bulk_purchase_url: str | None = None
     publish_status: str | None = None
     commerce_product_id: str | None = None
 
@@ -100,10 +99,11 @@ async def admin_endpoint(
 
 
 async def _handle_create_product(body: dict, db: AsyncSession) -> dict[str, object]:
-    """AD-0101: 상품 등록."""
-    required = ["name", "category_tag_id"]
+    """AD-0101: 상품 등록. image_url/purchase_url/calories/sugars는 실제 DB에서
+    NOT NULL이라 필수로 취급한다."""
+    required = ["name", "category_tag_id", "image_url", "purchase_url", "calories", "sugars"]
     for field in required:
-        if not body.get(field):
+        if body.get(field) is None:
             raise HTTPException(status_code=422, detail=f"필수 필드 누락: {field}")
 
     category_tag_id = _parse_uuid(body["category_tag_id"], "category_tag_id")
@@ -115,13 +115,27 @@ async def _handle_create_product(body: dict, db: AsyncSession) -> dict[str, obje
             brand_name=body.get("brand"),
             category_tag_id=category_tag_id,
             ingredient_text=body.get("ingredient_text"),
-            image_url=body.get("image_url"),
-            purchase_url=body.get("purchase_url"),
-            bulk_purchase_url=body.get("bulk_purchase_url"),
+            image_url=body["image_url"],
+            purchase_url=body["purchase_url"],
+            calories=Decimal(str(body["calories"])),
+            sugars=Decimal(str(body["sugars"])),
             commerce_product_id=body.get("commerce_product_id"),
         )
     except TagNotFoundError as e:
         raise HTTPException(status_code=422, detail=str(e))
+
+    remaining_nutrition = {k: body.get(k) for k in ("carbohydrate", "protein", "fat", "sodium")}
+    if any(v is not None for v in remaining_nutrition.values()):
+        await update_nutrition(
+            db,
+            product_id=product.product_id,
+            calories=product.calories,
+            sugars=product.sugars,
+            carbohydrate=Decimal(str(remaining_nutrition["carbohydrate"])) if remaining_nutrition["carbohydrate"] is not None else None,
+            protein=Decimal(str(remaining_nutrition["protein"])) if remaining_nutrition["protein"] is not None else None,
+            fat=Decimal(str(remaining_nutrition["fat"])) if remaining_nutrition["fat"] is not None else None,
+            sodium=Decimal(str(remaining_nutrition["sodium"])) if remaining_nutrition["sodium"] is not None else None,
+        )
 
     logger.info("admin: product created product_id=%s by admin", product.product_id)
     return {"status": "SUCCESS", "id": str(product.product_id)}
@@ -136,7 +150,6 @@ async def _handle_update_product(body: dict, db: AsyncSession) -> dict[str, obje
         "ingredient_text": body.get("ingredient_text"),
         "image_url": body.get("image_url"),
         "purchase_url": body.get("purchase_url"),
-        "bulk_purchase_url": body.get("bulk_purchase_url"),
         "publish_status": body.get("publish_status"),
         "commerce_product_id": body.get("commerce_product_id"),
     }.items() if v is not None}

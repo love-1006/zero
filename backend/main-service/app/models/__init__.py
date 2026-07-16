@@ -15,3 +15,8 @@ __all__ = [
     "UserHealthProfile",
     "UserPreference",
 ]
+
+# 이 서비스가 소유하고 self-migrate하는 테이블만. MealLog/MealTotal/Product/
+# ProductTag/Tag는 각각 Diet/Product/Ingredients 소유 읽기전용 모델이라
+# create_all() 대상에서 반드시 제외한다.
+OWNED_TABLES = [UserHealthProfile.__table__, UserPreference.__table__]

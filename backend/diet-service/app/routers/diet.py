@@ -36,15 +36,17 @@ def _to_uuid(value: str, label: str) -> uuid.UUID:
 
 
 def _item_dict(item) -> dict:
+    # service.meal_items에는 단백질/지방/나트륨 컬럼이 없다(실제 스키마 확인
+    # 완료) — 있는 것처럼 꾸미지 않고 null로 명시한다.
     return {
         "name": item.item_name,
         "dang": float(item.sugars) if item.sugars is not None else None,
         "calo": float(item.calories) if item.calories is not None else None,
         "ingred-list": [
-            {"name": "탄수화물", "amount": float(item.carbohydrate) if item.carbohydrate else None},
-            {"name": "단백질", "amount": float(item.protein) if item.protein else None},
-            {"name": "지방", "amount": float(item.fat) if item.fat else None},
-            {"name": "나트륨", "amount": float(item.sodium) if item.sodium else None},
+            {"name": "탄수화물", "amount": float(item.carbohydrate) if item.carbohydrate is not None else None},
+            {"name": "단백질", "amount": None},
+            {"name": "지방", "amount": None},
+            {"name": "나트륨", "amount": None},
         ],
     }
 
@@ -62,16 +64,18 @@ async def upload_diet(
     body: {img: S3_URL, mode: 'daily'(optional)}
     """
     user_id: int = payload["user_id"]
-    image_url: str | None = body.get("img")
-    if not image_url:
+    image_object_key: str | None = body.get("img")
+    if not image_object_key:
         raise HTTPException(status_code=422, detail="필수 필드 누락: img")
 
-    meal_type = "DAILY" if body.get("mode") == "daily" else "SNACK"
+    # 실제 DB의 meal_type CHECK 제약엔 'DAILY'가 없다(BREAKFAST/LUNCH/DINNER/
+    # SNACK/OTHER만 허용) — "하루 식단" 업로드는 OTHER로 매핑한다.
+    meal_type = "OTHER" if body.get("mode") == "daily" else "SNACK"
 
     log = await create_meal_log(
         db,
         user_id=user_id,
-        image_url=image_url,
+        image_object_key=image_object_key,
         meal_type=meal_type,
         input_type="VISION",
     )
@@ -186,7 +190,8 @@ async def calender(
             {
                 "date": log.eaten_at.strftime("%Y-%m-%d"),
                 "name": log.meal_type,
-                "url": f"/diet/other-foods?id={log.meal_log_id}&usr={{usr}}",
+                # usr는 토큰이라 응답에 그대로 안 심는다 — 프론트가 자기 토큰으로 붙여서 호출.
+                "url": f"/diet/other-foods?id={log.meal_log_id}",
             }
             for log in logs
         ]

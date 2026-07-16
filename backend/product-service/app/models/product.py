@@ -28,11 +28,10 @@ class Product(Base):
     sodium: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     # 원재료 (AD-0104 기준)
     ingredient_text: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # 상품 정보
+    # 상품 정보 — 실제 DB에서 NOT NULL (읽기 시 Optional로 다뤄도 무해하지만
+    # 생성 시엔 반드시 값이 있어야 함, product_store.create_product 참고)
     image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     purchase_url: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # 대용량 상품 추천용 (PR-0305)
-    bulk_purchase_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     publish_status: Mapped[str] = mapped_column(String(20), default="ACTIVE")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

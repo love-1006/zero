@@ -136,49 +136,16 @@ async def get_sweetener_tags_for_product(db: AsyncSession, product_id: uuid.UUID
     return list(result.scalars().all())
 
 
-async def get_bulk_candidates(db: AsyncSession, product_id: uuid.UUID) -> list[Product]:
-    """같은 카테고리 상품 중 bulk_purchase_url이 있는 것을 최대 5개 반환."""
-    # 대상 상품의 CATEGORY tag_id 조회
-    cat_stmt = (
-        select(ProductTag.tag_id)
-        .join(Tag, Tag.tag_id == ProductTag.tag_id)
-        .where(
-            ProductTag.product_id == product_id,
-            Tag.tag_type == "CATEGORY",
-        )
-        .limit(1)
-    )
-    cat_result = await db.execute(cat_stmt)
-    category_tag_id = cat_result.scalar_one_or_none()
-
-    if category_tag_id is None:
-        return []
-
-    stmt = (
-        select(Product)
-        .join(ProductTag, ProductTag.product_id == Product.product_id)
-        .where(
-            ProductTag.tag_id == category_tag_id,
-            Product.publish_status == "ACTIVE",
-            Product.bulk_purchase_url.isnot(None),
-            Product.product_id != product_id,
-        )
-        .order_by(Product.created_at.desc())
-        .limit(5)
-    )
-    result = await db.execute(stmt)
-    return list(result.scalars().all())
-
-
 async def create_product(
     db: AsyncSession,
     product_name: str,
     brand_name: str | None,
     category_tag_id: uuid.UUID,
     ingredient_text: str | None,
-    image_url: str | None,
-    purchase_url: str | None,
-    bulk_purchase_url: str | None,
+    image_url: str,
+    purchase_url: str,
+    calories: Decimal,
+    sugars: Decimal,
     commerce_product_id: str | None,
 ) -> Product:
     # tag 유효성 확인 (CATEGORY, active)
@@ -199,14 +166,15 @@ async def create_product(
         ingredient_text=ingredient_text,
         image_url=image_url,
         purchase_url=purchase_url,
-        bulk_purchase_url=bulk_purchase_url,
+        calories=calories,
+        sugars=sugars,
         commerce_product_id=commerce_product_id,
         publish_status="ACTIVE",
     )
     db.add(product)
 
     # CATEGORY 태그를 같은 트랜잭션에서 insert (트리거: DEFERRABLE INITIALLY DEFERRED)
-    product_tag = ProductTag(product_id=product.product_id, tag_id=category_tag_id)
+    product_tag = ProductTag(product_id=product.product_id, tag_id=category_tag_id, evidence_source="NAME")
     db.add(product_tag)
 
     await db.commit()
@@ -223,7 +191,7 @@ async def update_product(
     product = await get_product(db, product_id)
     allowed = {
         "product_name", "brand_name", "ingredient_text",
-        "image_url", "purchase_url", "bulk_purchase_url",
+        "image_url", "purchase_url",
         "publish_status", "commerce_product_id",
     }
     for key, value in fields.items():
@@ -291,7 +259,7 @@ async def update_allergen_tags(
         tag_result = await db.execute(tag_stmt)
         if tag_result.scalar_one_or_none() is None:
             raise TagNotFoundError(f"유효한 ALLERGEN 태그를 찾을 수 없습니다. tag_id={tag_id}")
-        db.add(ProductTag(product_id=product_id, tag_id=tag_id))
+        db.add(ProductTag(product_id=product_id, tag_id=tag_id, evidence_source="INGREDIENT"))
 
     await db.commit()
     logger.info("allergen tags updated product_id=%s count=%d", product_id, len(allergen_tag_ids))
