@@ -16,6 +16,8 @@ class Settings(BaseSettings):
 
     jwt_secret: str = ""
     jwt_algorithm: str = "HS256"
+    # Must match login-service's JWT_EXPIRE_MINUTES (sliding-session refresh).
+    jwt_expire_minutes: int = 180
 
     anthropic_api_key: str = ""
 

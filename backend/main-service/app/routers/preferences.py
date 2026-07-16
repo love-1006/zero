@@ -1,7 +1,7 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,8 +29,8 @@ class AddPreferenceRequest(BaseModel):
 
 
 @router.get("")
-async def get_preferences(usr: str, db: AsyncSession = Depends(get_db)) -> dict[str, object]:
-    user = get_current_user_from_token(usr)
+async def get_preferences(usr: str, response: Response, db: AsyncSession = Depends(get_db)) -> dict[str, object]:
+    user = get_current_user_from_token(usr, response)
     preferences = await list_preferences(db, user.user_id)
     return {
         "preferences": [
@@ -46,8 +46,10 @@ async def get_preferences(usr: str, db: AsyncSession = Depends(get_db)) -> dict[
 
 
 @router.post("")
-async def create_preference(payload: AddPreferenceRequest, db: AsyncSession = Depends(get_db)) -> dict[str, object]:
-    user = get_current_user_from_token(payload.usr)
+async def create_preference(
+    payload: AddPreferenceRequest, response: Response, db: AsyncSession = Depends(get_db)
+) -> dict[str, object]:
+    user = get_current_user_from_token(payload.usr, response)
     try:
         preference = await add_preference(
             db, user.user_id, payload.preference_type, payload.tag_id, payload.custom_value
@@ -64,9 +66,9 @@ async def create_preference(payload: AddPreferenceRequest, db: AsyncSession = De
 
 @router.delete("/{preference_id}")
 async def delete_preference(
-    preference_id: uuid.UUID, usr: str, db: AsyncSession = Depends(get_db)
+    preference_id: uuid.UUID, usr: str, response: Response, db: AsyncSession = Depends(get_db)
 ) -> dict[str, str]:
-    user = get_current_user_from_token(usr)
+    user = get_current_user_from_token(usr, response)
     deleted = await remove_preference(db, user.user_id, preference_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="선호 정보를 찾을 수 없습니다.")

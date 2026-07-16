@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -10,8 +10,8 @@ router = APIRouter(prefix="/home")
 
 
 @router.get("/user-sugar-calorie")
-async def get_daily_gauge(usr: str, db: AsyncSession = Depends(get_db)) -> dict[str, object]:
-    user = get_current_user_from_token(usr)
+async def get_daily_gauge(usr: str, response: Response, db: AsyncSession = Depends(get_db)) -> dict[str, object]:
+    user = get_current_user_from_token(usr, response)
     calories, sugars = await get_today_totals(db, user.user_id)
     profile = await get_health_profile(db, user.user_id)
 

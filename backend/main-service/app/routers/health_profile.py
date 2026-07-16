@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -60,17 +60,19 @@ def _serialize(profile: UserHealthProfile | None) -> dict[str, object]:
 
 
 @router.get("/health-profile")
-async def read_health_profile(usr: str, db: AsyncSession = Depends(get_db)) -> dict[str, object]:
-    user = get_current_user_from_token(usr)
+async def read_health_profile(
+    usr: str, response: Response, db: AsyncSession = Depends(get_db)
+) -> dict[str, object]:
+    user = get_current_user_from_token(usr, response)
     profile = await get_health_profile(db, user.user_id)
     return _serialize(profile)
 
 
 @router.put("/health-profile")
 async def update_health_profile(
-    payload: HealthProfileUpdateRequest, db: AsyncSession = Depends(get_db)
+    payload: HealthProfileUpdateRequest, response: Response, db: AsyncSession = Depends(get_db)
 ) -> dict[str, object]:
-    user = get_current_user_from_token(payload.usr)
+    user = get_current_user_from_token(payload.usr, response)
     try:
         profile = await upsert_health_profile(
             db,

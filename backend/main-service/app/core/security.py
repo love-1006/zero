@@ -1,7 +1,8 @@
 import logging
+import time
 
 import jwt
-from fastapi import HTTPException, status
+from fastapi import HTTPException, Response, status
 from pydantic import BaseModel
 
 from app.core.config import settings
@@ -16,7 +17,7 @@ class UserIdentity(BaseModel):
     nickname: str
 
 
-def get_current_user_from_token(token: str) -> UserIdentity:
+def get_current_user_from_token(token: str, response: Response) -> UserIdentity:
     try:
         # algorithms=["HS256"] is an explicit allowlist — PyJWT will not honor
         # an "alg": "none" or other algorithm smuggled into the token header.
@@ -28,4 +29,11 @@ def get_current_user_from_token(token: str) -> UserIdentity:
     user_id = int(payload["sub"])
     nickname = str(payload.get("nickname", ""))
     logger.info("user auth success: user_id=%s", user_id)
+
+    # 슬라이딩 세션 — 같은 시크릿으로 클레임은 유지한 채 만료시각만 연장해
+    # 재서명, 응답 헤더로 내려준다. 프론트는 이 헤더가 있으면 토큰을 교체한다.
+    now = int(time.time())
+    refreshed_payload = {**payload, "iat": now, "exp": now + settings.jwt_expire_minutes * 60}
+    response.headers["X-Refreshed-Token"] = jwt.encode(refreshed_payload, settings.jwt_secret, algorithm="HS256")
+
     return UserIdentity(user_id=user_id, nickname=nickname)

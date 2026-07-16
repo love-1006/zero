@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     apple_redirect_uri: str = "http://localhost:8000/social-access/apple/callback"
 
     jwt_secret: str = "dev-secret-change-me"
-    jwt_expire_minutes: int = 60
+    jwt_expire_minutes: int = 180
 
     frontend_url: str = "http://localhost:3000"
 

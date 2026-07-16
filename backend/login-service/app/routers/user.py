@@ -3,7 +3,7 @@ from datetime import date
 from typing import Annotated
 
 import jwt as pyjwt
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,12 +28,17 @@ def _calculate_age(birthday: date | None) -> int | None:
     return today.year - birthday.year - ((today.month, today.day) < (birthday.month, birthday.day))
 
 
-def _decode_user_id_or_401(token: str) -> int:
+def _decode_user_id_or_401(token: str, response: Response) -> int:
     try:
-        return jwt_service.decode_user_id(token)
+        payload = jwt_service.decode_payload(token)
     except pyjwt.InvalidTokenError as error:
         logger.warning("user request denied: reason=invalid_token")
         raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다.") from error
+
+    # 슬라이딩 세션 — 이 토큰으로 뭔가 하나 성공할 때마다 만료시각을 연장한
+    # 새 토큰을 헤더로 내려준다. 프론트는 이 헤더가 있으면 저장된 토큰을 교체한다.
+    response.headers["X-Refreshed-Token"] = jwt_service.refresh_token(payload)
+    return int(payload["sub"])
 
 
 class FirstSetRequest(BaseModel):
@@ -49,8 +54,10 @@ class FirstSetRequest(BaseModel):
 
 
 @router.post("/firstset")
-async def first_set(payload: FirstSetRequest, db: AsyncSession = Depends(get_db)) -> dict[str, str]:
-    user_id = _decode_user_id_or_401(payload.usr)
+async def first_set(
+    payload: FirstSetRequest, response: Response, db: AsyncSession = Depends(get_db)
+) -> dict[str, str]:
+    user_id = _decode_user_id_or_401(payload.usr, response)
 
     user = await db.get(User, user_id)
     if user is None:
@@ -75,8 +82,8 @@ async def first_set(payload: FirstSetRequest, db: AsyncSession = Depends(get_db)
 
 
 @router.get("/mypage")
-async def get_mypage(usr: str, db: AsyncSession = Depends(get_db)) -> dict[str, object]:
-    user_id = _decode_user_id_or_401(usr)
+async def get_mypage(usr: str, response: Response, db: AsyncSession = Depends(get_db)) -> dict[str, object]:
+    user_id = _decode_user_id_or_401(usr, response)
 
     user = await db.get(User, user_id)
     if user is None:
@@ -106,8 +113,10 @@ async def get_mypage(usr: str, db: AsyncSession = Depends(get_db)) -> dict[str, 
 
 
 @router.delete("/social/{provider}")
-async def unlink_social(provider: str, usr: str, db: AsyncSession = Depends(get_db)) -> dict[str, object]:
-    user_id = _decode_user_id_or_401(usr)
+async def unlink_social(
+    provider: str, usr: str, response: Response, db: AsyncSession = Depends(get_db)
+) -> dict[str, object]:
+    user_id = _decode_user_id_or_401(usr, response)
 
     try:
         remaining = await user_store.unlink_social_account(db, user_id=user_id, provider=provider)
@@ -120,11 +129,15 @@ async def unlink_social(provider: str, usr: str, db: AsyncSession = Depends(get_
 
 
 @router.delete("/mypage")
-async def leave(usr: str, exituser: str, db: AsyncSession = Depends(get_db)) -> dict[str, str]:
+async def leave(
+    usr: str, exituser: str, response: Response, db: AsyncSession = Depends(get_db)
+) -> dict[str, str]:
     if exituser != "EXIT":
         raise HTTPException(status_code=400, detail="exituser=EXIT 파라미터로 탈퇴 의사를 명시적으로 확인해야 합니다.")
 
-    user_id = _decode_user_id_or_401(usr)
+    # 탈퇴 처리 자체엔 갱신 토큰이 의미 없지만(계정이 곧 사라짐), 검증 로직은
+    # 통일해서 쓴다 — 헤더는 그냥 무시돼도 무해하다.
+    user_id = _decode_user_id_or_401(usr, response)
     await user_store.delete_user(db, user_id)
 
     return {"status": "SUCCESS"}

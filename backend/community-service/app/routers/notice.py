@@ -1,7 +1,7 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -80,8 +80,10 @@ async def get_notice_detail(notice_id: uuid.UUID, db: AsyncSession = Depends(get
 
 
 @router.post("")
-async def write_notice(payload: NoticeCreateRequest, db: AsyncSession = Depends(get_db)) -> dict[str, object]:
-    admin = get_current_admin_from_token(payload.usr)
+async def write_notice(
+    payload: NoticeCreateRequest, response: Response, db: AsyncSession = Depends(get_db)
+) -> dict[str, object]:
+    admin = get_current_admin_from_token(payload.usr, response)
     notice = await create_notice(
         db,
         admin.user_id,
@@ -96,9 +98,9 @@ async def write_notice(payload: NoticeCreateRequest, db: AsyncSession = Depends(
 
 @router.put("/{notice_id}")
 async def edit_notice(
-    notice_id: uuid.UUID, payload: NoticeUpdateRequest, db: AsyncSession = Depends(get_db)
+    notice_id: uuid.UUID, payload: NoticeUpdateRequest, response: Response, db: AsyncSession = Depends(get_db)
 ) -> dict[str, object]:
-    get_current_admin_from_token(payload.usr)
+    get_current_admin_from_token(payload.usr, response)
     try:
         notice = await update_notice(
             db,
@@ -122,8 +124,10 @@ async def edit_notice(
 
 
 @router.delete("/{notice_id}")
-async def remove_notice(notice_id: uuid.UUID, usr: str, db: AsyncSession = Depends(get_db)) -> dict[str, str]:
-    get_current_admin_from_token(usr)
+async def remove_notice(
+    notice_id: uuid.UUID, usr: str, response: Response, db: AsyncSession = Depends(get_db)
+) -> dict[str, str]:
+    get_current_admin_from_token(usr, response)
     try:
         await delete_notice(db, notice_id)
     except NoticeNotFoundError as error:
@@ -133,8 +137,10 @@ async def remove_notice(notice_id: uuid.UUID, usr: str, db: AsyncSession = Depen
 
 
 @router.post("/{notice_id}/like")
-async def like_notice(notice_id: uuid.UUID, usr: str, db: AsyncSession = Depends(get_db)) -> dict[str, object]:
-    user = get_current_user_from_token(usr)
+async def like_notice(
+    notice_id: uuid.UUID, usr: str, response: Response, db: AsyncSession = Depends(get_db)
+) -> dict[str, object]:
+    user = get_current_user_from_token(usr, response)
     try:
         liked, count = await toggle_like(db, notice_id, user.user_id)
     except NoticeNotFoundError as error:
