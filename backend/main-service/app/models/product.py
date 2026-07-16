@@ -1,8 +1,7 @@
 import uuid
-from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, Numeric, String, Text, func
+from sqlalchemy import Numeric, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -11,7 +10,11 @@ from app.core.database import Base
 
 class Product(Base):
     """Product Service owns this table — main-service only reads it, for
-    home-screen recommendations/rankings/search."""
+    home-screen recommendations/rankings/search.
+
+    2026-07-16 데이터팀 재설계 반영 — publish_status/created_at 컬럼이 더 이상
+    존재하지 않는다(실제 DB 재확인 완료).
+    """
 
     __tablename__ = "products"
     __table_args__ = {"schema": "service"}
@@ -22,6 +25,4 @@ class Product(Base):
     calories: Mapped[Decimal] = mapped_column(Numeric(10, 2))
     sugars: Mapped[Decimal] = mapped_column(Numeric(10, 2))
     image_url: Mapped[str] = mapped_column(Text)
-    purchase_url: Mapped[str] = mapped_column(Text)
-    publish_status: Mapped[str] = mapped_column(String(20))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    purchase_url: Mapped[str | None] = mapped_column(Text, nullable=True)

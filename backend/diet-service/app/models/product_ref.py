@@ -9,7 +9,11 @@ from app.core.database import Base
 
 
 class ProductRef(Base):
-    """Product Service 소유 — service.products. 읽기 전용 스냅샷 복사용."""
+    """Product Service 소유 — service.products. 읽기 전용 스냅샷 복사용.
+
+    2026-07-16 데이터팀 재설계 반영 — publish_status 컬럼이 더 이상 존재하지
+    않는다(실제 DB 재확인 완료).
+    """
 
     __tablename__ = "products"
     __table_args__ = {"schema": "service"}
@@ -25,4 +29,3 @@ class ProductRef(Base):
     sodium: Mapped[Decimal | None] = mapped_column(Numeric(8, 2), nullable=True)
     image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     purchase_url: Mapped[str | None] = mapped_column(Text, nullable=True)
-    publish_status: Mapped[str] = mapped_column(String(20))

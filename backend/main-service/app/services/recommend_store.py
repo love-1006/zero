@@ -14,22 +14,22 @@ async def get_recommended_products(db: AsyncSession, user_id: int) -> list[Produ
     )
     tag_ids = [row[0] for row in (await db.execute(tag_stmt)).all()]
 
+    # publish_status/created_at 컬럼이 데이터팀 재설계로 삭제돼(2026-07-16)
+    # "active만/최신순" 필터링이 더 이상 불가능 — 이름순으로 대체.
     if tag_ids:
         stmt = (
             select(Product)
             .join(ProductTag, ProductTag.product_id == Product.product_id)
-            .where(Product.publish_status == "ACTIVE", ProductTag.tag_id.in_(tag_ids))
+            .where(ProductTag.tag_id.in_(tag_ids))
             .distinct()
-            .order_by(Product.created_at.desc())
+            .order_by(Product.product_name)
             .limit(_RECOMMEND_LIMIT)
         )
     else:
-        # No INTEREST_CATEGORY preferences set yet — newest active products
-        # instead of an empty list.
+        # No INTEREST_CATEGORY preferences set yet — fall back to a plain list.
         stmt = (
             select(Product)
-            .where(Product.publish_status == "ACTIVE")
-            .order_by(Product.created_at.desc())
+            .order_by(Product.product_name)
             .limit(_RECOMMEND_LIMIT)
         )
 

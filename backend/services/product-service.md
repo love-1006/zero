@@ -2,7 +2,7 @@
 
 ## 소유 데이터
 
-- `service.products` (23컬럼, PK `product_id` UUID)
+- `service.products` (17컬럼, PK `product_id` UUID)
 - `service.product_tags` (PK `(product_id, tag_id)`)
 
 쓰기는 이 서비스만 한다. 다른 서비스는 이 두 테이블에 직접 INSERT/UPDATE하지 않는다.
@@ -15,8 +15,10 @@
 
 - **CATEGORY 개수 트리거**: `products` insert와 그 상품의 CATEGORY 태그 insert(`product_tags`, `tags.tag_type='CATEGORY'`)를 **같은 트랜잭션**에서 처리해야 한다. `ctr_product_category_after_product`/`ctr_product_category_after_tag`가 `DEFERRABLE INITIALLY DEFERRED`라 COMMIT 시점에 "이 상품 CATEGORY 태그가 정확히 1개인가"를 검사한다. 트랜잭션을 나누면 커밋 시점에 뜬금없이 실패한다.
 - `product_tags.tag_id`를 넣기 전에 해당 `tag_id`가 `service.tags`에 실제로 존재하고 `active=true`인지 확인한다(Ingredients Service API 호출 또는 같은 DB 내 조인).
-- `commerce_product_id`는 UNIQUE — 판매처 재크롤링/재등록 시 upsert 키로 사용.
-- 신규 상품 `product_id`를 원본 크롤링 데이터와 동일 규칙으로 재현하려면 `UUIDv5(NAMESPACE_URL, "service-db-v1.0/product/{commerce_product_id}")`를 쓴다. 그럴 필요 없는 신규 등록 상품은 `gen_random_uuid()`로도 충분하다.
+- `serving_value`/`serving_unit`은 둘 다 있거나 둘 다 없어야 한다(`ck_products_serving_pair` CHECK).
+- `calories`/`sugars`/`image_url`은 NOT NULL — 등록 시 필수.
+
+> 2026-07-16 데이터팀이 `products` 테이블을 재설계했다(레시피_상품_데이터명세서_v0.2 기준, 실제 DB 재확인 완료). **`commerce_product_id`/`publish_status`/`created_at`/`updated_at` 컬럼이 삭제됐다** — upsert 키·활성상태 필터·최신순 정렬에 쓰던 컬럼들이라 검색/추천 정렬은 전부 이름순으로 대체했다. 대신 `report_no`/`manufacturer_name`/`food_type`/`serving_value`/`serving_unit`이 추가됐다. `purchase_url`도 nullable로 바뀌었다(과거엔 NOT NULL로 취급했음).
 
 ## 담당 기능 (기능명세서 기준)
 
@@ -38,8 +40,7 @@ SELECT p.product_id, p.product_name, p.brand_name, p.image_url
 FROM service.products p
 JOIN service.product_tags pt_cat ON pt_cat.product_id = p.product_id
 JOIN service.tags t_cat ON t_cat.tag_id = pt_cat.tag_id AND t_cat.tag_type = 'CATEGORY' AND t_cat.tag_code = $1
-WHERE p.publish_status = 'ACTIVE'
-  AND NOT EXISTS (
+WHERE NOT EXISTS (
     SELECT 1 FROM service.product_tags pt_allergen
     JOIN service.tags t_allergen ON t_allergen.tag_id = pt_allergen.tag_id
     WHERE pt_allergen.product_id = p.product_id

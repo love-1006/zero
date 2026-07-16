@@ -30,10 +30,7 @@ async def search_products(
     sort: str | None,
     page: int,
 ) -> list[Product]:
-    stmt = (
-        select(Product)
-        .where(Product.publish_status == "ACTIVE")
-    )
+    stmt = select(Product)
 
     if query:
         pattern = f"%{query}%"
@@ -73,11 +70,9 @@ async def search_products(
             )
         )
 
-    if sort == "abc":
-        stmt = stmt.order_by(Product.product_name)
-    else:
-        # 기본: 최신 등록순 (rank 구현은 Kafka/MongoDB 파이프라인 필요 — 현재는 최신순)
-        stmt = stmt.order_by(Product.created_at.desc())
+    # rank 구현은 Kafka/MongoDB 파이프라인 필요. created_at 컬럼이 데이터팀
+    # 재설계로 삭제돼 "최신순" 기본 정렬도 더 이상 불가능 — 두 경우 다 이름순.
+    stmt = stmt.order_by(Product.product_name)
 
     stmt = stmt.offset((page - 1) * _PAGE_SIZE).limit(_PAGE_SIZE)
     result = await db.execute(stmt)
@@ -89,7 +84,6 @@ async def autocomplete_products(db: AsyncSession, query: str) -> list[Product]:
     stmt = (
         select(Product)
         .where(
-            Product.publish_status == "ACTIVE",
             or_(
                 Product.product_name.ilike(pattern),
                 Product.brand_name.ilike(pattern),
@@ -143,10 +137,14 @@ async def create_product(
     category_tag_id: uuid.UUID,
     ingredient_text: str | None,
     image_url: str,
-    purchase_url: str,
     calories: Decimal,
     sugars: Decimal,
-    commerce_product_id: str | None,
+    purchase_url: str | None = None,
+    report_no: str | None = None,
+    manufacturer_name: str | None = None,
+    food_type: str | None = None,
+    serving_value: Decimal | None = None,
+    serving_unit: str | None = None,
 ) -> Product:
     # tag 유효성 확인 (CATEGORY, active)
     tag_stmt = select(Tag).where(
@@ -159,6 +157,9 @@ async def create_product(
     if tag is None:
         raise TagNotFoundError(f"유효한 CATEGORY 태그를 찾을 수 없습니다. tag_id={category_tag_id}")
 
+    if (serving_value is None) != (serving_unit is None):
+        raise ValueError("serving_value와 serving_unit은 둘 다 있거나 둘 다 없어야 합니다.")
+
     product = Product(
         product_id=uuid.uuid4(),
         product_name=product_name,
@@ -168,8 +169,11 @@ async def create_product(
         purchase_url=purchase_url,
         calories=calories,
         sugars=sugars,
-        commerce_product_id=commerce_product_id,
-        publish_status="ACTIVE",
+        report_no=report_no,
+        manufacturer_name=manufacturer_name,
+        food_type=food_type,
+        serving_value=serving_value,
+        serving_unit=serving_unit,
     )
     db.add(product)
 
@@ -192,7 +196,7 @@ async def update_product(
     allowed = {
         "product_name", "brand_name", "ingredient_text",
         "image_url", "purchase_url",
-        "publish_status", "commerce_product_id",
+        "report_no", "manufacturer_name", "food_type", "serving_value", "serving_unit",
     }
     for key, value in fields.items():
         if key in allowed:
