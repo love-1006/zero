@@ -1,0 +1,52 @@
+import logging
+import time
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
+
+# Explicit UTC timestamps in every log line (ASVS V16.2.2).
+logging.Formatter.converter = time.gmtime
+logging.basicConfig(level=logging.INFO, format="%(asctime)sZ %(levelname)s %(name)s %(message)s")
+
+from app.core.config import settings  # noqa: E402
+from app.core.database import Base, engine  # noqa: E402
+from app.models import OWNED_TABLES  # noqa: E402, F401 (import registers Notice/NoticeLike/Tag on Base.metadata)
+from app.routers import health, notice, sweetener  # noqa: E402
+
+logger = logging.getLogger("community_service")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with engine.begin() as conn:
+        # `community` is this service's own schema — created/migrated here.
+        # `service` (where Tag/tags lives) is data-team managed and never
+        # touched: create_all(tables=...) is scoped to OWNED_TABLES only.
+        await conn.execute(text("CREATE SCHEMA IF NOT EXISTS community"))
+        await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=OWNED_TABLES))
+    yield
+
+
+app = FastAPI(title="Community Service", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[settings.frontend_url],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_headers=["*"],
+)
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    # Never leak stack traces / internals to the client (A10) — log server-side, return a generic message.
+    logger.exception("unhandled error handling %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=500, content={"detail": "일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요."})
+
+
+app.include_router(health.router)
+app.include_router(notice.router)
+app.include_router(sweetener.router)
