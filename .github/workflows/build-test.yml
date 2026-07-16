@@ -16,6 +16,24 @@ env:
   IMAGE_NAME: harbor.hizero.local/dangdang/ci-sandbox
 
 jobs:
+  # backend/ 디렉터리 존재 여부를 먼저 체크아웃해서 확인한다. job 레벨 if:는 체크아웃 전
+  # (파일시스템에 아직 접근 못 하는 시점)에 평가되기 때문에 hashFiles()를 job 레벨 if:에서
+  # 바로 쓸 수 없다(실제로 시도했다가 "Unrecognized function: hashFiles" 에러로 확인함) -
+  # 그래서 이렇게 별도 job에서 먼저 체크아웃 후 확인해 output으로 넘기는 방식이 필요하다.
+  detect-backend:
+    runs-on: ubuntu-latest
+    outputs:
+      exists: ${{ steps.check.outputs.exists }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        run: |
+          if [ -d backend ] && [ -n "$(find backend -type f | head -1)" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
   # 내부망 접근이 필요 없는 단계 - GitHub 클라우드 러너에서 실행
   build-test:
     runs-on: ubuntu-latest
@@ -36,9 +54,10 @@ jobs:
   # 지금 단계에서 검증하고, 테스트가 생기면 이 스텝에 pytest를 추가하면 된다.
   backend-build-test:
     # main엔 아직 backend/ 디렉터리가 없다(PR #19 미병합) - 디렉터리 자체가 없는 브랜치에서
-    # 매트릭스를 그대로 돌리면 전부 "파일 없음"으로 실패하니, backend/ 아래 파일이 하나라도
-    # 있을 때만 실행되게 가드를 건다. PR #19가 병합되면 자동으로 정상 실행된다.
-    if: hashFiles('backend/**') != ''
+    # 매트릭스를 그대로 돌리면 전부 "파일 없음"으로 실패하니, detect-backend의 결과가
+    # true일 때만 실행되게 가드를 건다. PR #19가 병합되면 자동으로 정상 실행된다.
+    needs: detect-backend
+    if: needs.detect-backend.outputs.exists == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -94,8 +113,8 @@ jobs:
   # 임의로 만들면 되돌리기 번거로운 인프라 결정을 CI 파이프라인이 먼저 확정해버리는 셈이라,
   # 지금은 "병합 전에 취약점만 걸러낸다"까지만 하고 push/deploy는 별도 작업으로 남긴다.
   backend-image-scanning:
-    needs: build-test
-    if: hashFiles('backend/**') != ''
+    needs: [detect-backend, build-test]
+    if: needs.detect-backend.outputs.exists == 'true'
     runs-on: self-hosted
     strategy:
       fail-fast: false
