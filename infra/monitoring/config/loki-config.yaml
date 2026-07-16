@@ -1,0 +1,84 @@
+# Loki 3.5.7 커스텀 설정. 이미지 기본 번들 설정(cmd/loki/loki-local-config.yaml, Loki 공식
+# 저장소 확인)을 그대로 기반으로 하되 두 가지를 바꿨다.
+#
+# 1) path_prefix를 /tmp/loki -> /loki로 변경. docker-compose.yml이 영구 볼륨을 /loki에
+#    마운트하는데 기본 설정은 /tmp/loki를 쓰고 있어서, 지금까지 실제로는 로그 데이터가
+#    영구 볼륨이 아니라 컨테이너 임시 파일시스템에 쌓이고 있었다(컨테이너 재시작 시 유실
+#    위험 - 이번에 커스텀 설정을 만들면서 함께 발견하고 고쳤다).
+# 2) compactor.retention_enabled + limits_config.retention_period 추가. 기본값은
+#    retention_enabled: false라 로그가 무기한 쌓이는데(Loki 공식 문서, "Log retention"
+#    페이지 확인), 데이터보존_백업_및_접근권한_관리_정책 문서의 권장값(336h = 14일)을
+#    실제로 적용한다.
+#
+# retention은 index period가 24h여야만 동작한다(Loki 공식 요구사항) - 기본 schema_config가
+# 이미 24h라 별도 변경 불필요.
+
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+  log_level: info
+  grpc_server_max_concurrent_streams: 1000
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+query_range:
+  results_cache:
+    cache:
+      embedded_cache:
+        enabled: true
+        max_size_mb: 100
+
+schema_config:
+  configs:
+    - from: 2020-10-24
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+storage_config:
+  tsdb_shipper:
+    active_index_directory: /loki/tsdb-index
+    cache_location: /loki/tsdb-cache
+
+# 보존 기간 실제 적용 - 데이터보존_백업_및_접근권한_관리_정책_20260714.md 권장값(336h/14일).
+limits_config:
+  metric_aggregation_enabled: true
+  retention_period: 336h
+
+compactor:
+  working_directory: /loki/compactor
+  compaction_interval: 10m
+  retention_enabled: true
+  retention_delete_delay: 2h
+  retention_delete_worker_count: 150
+  delete_request_store: filesystem
+
+pattern_ingester:
+  enabled: true
+  metric_aggregation:
+    loki_address: localhost:3100
+
+ruler:
+  alertmanager_url: http://localhost:9093
+
+frontend:
+  encoding: protobuf
+
+querier:
+  engine:
+    enable_multi_variant_queries: true
