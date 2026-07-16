@@ -1,3 +1,12 @@
+# 모든 컨테이너에 로그 로테이션을 강제한다(Docker 공식 json-file 로그 드라이버 옵션).
+# 기본값(max-size unlimited)으로 두면 로그가 무제한으로 쌓여 호스트 디스크를 채울 수 있어서,
+# 컨테이너당 최대 10MB x 3개(총 30MB)로 제한한다. YAML 앵커로 모든 서비스에 동일 적용.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   prometheus:
     image: prom/prometheus:v3.5.0
@@ -11,17 +20,21 @@ services:
       - prometheus_data:/prometheus
     ports:
       - "9090:9090"
+    logging: *default-logging
     restart: unless-stopped
 
   loki:
     image: grafana/loki:3.5.7
     container_name: loki
-    # 이미지에 기본 번들된 /etc/loki/local-config.yaml(단일 바이너리, 로컬 파일시스템 저장) 그대로 사용.
-    # 커스텀 설정이 필요해지면 그때 config/loki-config.yaml로 오버라이드.
+    command: -config.file=/etc/loki/loki-config.yaml
+    # 기본 번들 설정(local-config.yaml) 대신 커스텀 설정을 마운트한다 - 보존 기간(retention)을
+    # 명시적으로 켜기 위함(데이터보존_백업_및_접근권한_관리_정책 문서 권장값, 336h/14일 적용).
     volumes:
+      - ./config/loki-config.yaml:/etc/loki/loki-config.yaml:ro
       - loki_data:/loki
     ports:
       - "3100:3100"
+    logging: *default-logging
     restart: unless-stopped
 
   tempo:
@@ -33,6 +46,7 @@ services:
       - tempo_data:/var/tempo
     ports:
       - "3200:3200"
+    logging: *default-logging
     restart: unless-stopped
 
   blackbox-exporter:
@@ -42,6 +56,7 @@ services:
       - ./config/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
     ports:
       - "9115:9115"
+    logging: *default-logging
     restart: unless-stopped
 
   alloy:
@@ -61,6 +76,7 @@ services:
       - tempo
       - loki
       - prometheus
+    logging: *default-logging
     restart: unless-stopped
 
   grafana:
@@ -79,6 +95,7 @@ services:
       - prometheus
       - loki
       - tempo
+    logging: *default-logging
     restart: unless-stopped
 
 volumes:
