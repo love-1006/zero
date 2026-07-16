@@ -44,8 +44,8 @@ async def administrator_login(
     payload: AdminLoginRequest, request: Request, db: AsyncSession = Depends(get_db)
 ) -> dict[str, str]:
     client_ip = request.client.host if request.client else "unknown"
-    ip_blocked = rate_limiter.hit(f"admin-login:ip:{client_ip}", _LOGIN_MAX_ATTEMPTS_PER_IP)
-    id_blocked = rate_limiter.hit(f"admin-login:id:{payload.id}", _LOGIN_MAX_ATTEMPTS_PER_ID)
+    ip_blocked = await rate_limiter.hit(f"admin-login:ip:{client_ip}", _LOGIN_MAX_ATTEMPTS_PER_IP)
+    id_blocked = await rate_limiter.hit(f"admin-login:id:{payload.id}", _LOGIN_MAX_ATTEMPTS_PER_ID)
     if ip_blocked or id_blocked:
         logger.warning("admin login denied: reason=rate_limited login_id=%r ip=%s", payload.id, client_ip)
         raise HTTPException(status_code=429, detail="너무 많은 시도가 있었습니다. 잠시 후 다시 시도해주세요.")
@@ -63,7 +63,7 @@ async def administrator_login(
         raise HTTPException(status_code=401, detail=str(error)) from error
 
     token = jwt_service.create_access_token(account.user_id, "admin", account.login_id, role="admin")
-    session_store.set_active_token(token)
+    await session_store.set_active_token(token)
     logger.info("admin login success: user_id=%s login_id=%r", account.user_id, account.login_id)
 
     return {"status": "SUCCESS", "token": token}
@@ -74,7 +74,7 @@ async def administrator_signup(
     payload: AdminSignupRequest, request: Request, db: AsyncSession = Depends(get_db)
 ) -> dict[str, str]:
     client_ip = request.client.host if request.client else "unknown"
-    if rate_limiter.hit(f"admin-signup:ip:{client_ip}", _SIGNUP_MAX_ATTEMPTS_PER_IP):
+    if await rate_limiter.hit(f"admin-signup:ip:{client_ip}", _SIGNUP_MAX_ATTEMPTS_PER_IP):
         logger.warning("admin signup denied: reason=rate_limited ip=%s", client_ip)
         raise HTTPException(status_code=429, detail="너무 많은 시도가 있었습니다. 잠시 후 다시 시도해주세요.")
 

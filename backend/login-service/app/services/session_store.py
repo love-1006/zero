@@ -1,12 +1,16 @@
-# Temporary in-memory holder for a single "active" test session token.
-# Not a real session mechanism — only for local testing convenience.
-_active_token: str | None = None
+from app.core.config import settings
+from app.core.redis_client import redis_client
+
+# Not a real per-user session mechanism — still just a single "last active
+# token" slot for local/manual testing convenience (see auth.py's `link`
+# fallback), now backed by Redis instead of a process-local global so it
+# survives restarts and is shared across instances.
+_KEY = "login-service:session:active_token"
 
 
-def set_active_token(token: str) -> None:
-    global _active_token
-    _active_token = token
+async def set_active_token(token: str) -> None:
+    await redis_client.set(_KEY, token, ex=settings.jwt_expire_minutes * 60)
 
 
-def get_active_token() -> str | None:
-    return _active_token
+async def get_active_token() -> str | None:
+    return await redis_client.get(_KEY)

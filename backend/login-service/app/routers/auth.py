@@ -39,28 +39,28 @@ def _frontend_redirect(**params: str | bool | None) -> RedirectResponse:
 
 
 @router.get("/{provider}/login")
-def login(provider: str) -> RedirectResponse:
+async def login(provider: str) -> RedirectResponse:
     module = _get_provider_module(provider)
-    state = state_store.create_state()
+    state = await state_store.create_state()
     return RedirectResponse(module.build_authorize_url(state))
 
 
 @router.post("/session")
-def activate_session(token: str) -> dict[str, str]:
+async def activate_session(token: str) -> dict[str, str]:
     try:
         jwt_service.decode_user_id(token)
     except pyjwt.InvalidTokenError as error:
         logger.warning("session activation denied: reason=invalid_token")
         raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다.") from error
 
-    session_store.set_active_token(token)
+    await session_store.set_active_token(token)
     return {"status": "ok"}
 
 
 @router.get("/{provider}/link")
-def link(provider: str, token: str | None = None) -> RedirectResponse:
+async def link(provider: str, token: str | None = None) -> RedirectResponse:
     module = _get_provider_module(provider)
-    active_token = token or session_store.get_active_token()
+    active_token = token or await session_store.get_active_token()
     if active_token is None:
         logger.warning("social link denied: reason=missing_active_session provider=%s", provider)
         raise HTTPException(status_code=401, detail="연동할 활성 세션 토큰이 없습니다. 먼저 로그인해주세요.")
@@ -71,7 +71,7 @@ def link(provider: str, token: str | None = None) -> RedirectResponse:
         logger.warning("social link denied: reason=invalid_token provider=%s", provider)
         raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다.") from error
 
-    state = state_store.create_state(link_user_id=user_id)
+    state = await state_store.create_state(link_user_id=user_id)
     return RedirectResponse(module.build_authorize_url(state))
 
 
@@ -86,7 +86,7 @@ async def callback(
 ) -> RedirectResponse:
     module = _get_provider_module(provider)
 
-    state_entry = state_store.verify_and_consume_state(state)
+    state_entry = await state_store.verify_and_consume_state(state)
     if state_entry is None:
         logger.warning("social login denied: provider=%s reason=invalid_or_expired_state", provider)
         return _frontend_redirect(error="state 값이 유효하지 않거나 만료되었습니다.")
@@ -136,7 +136,7 @@ async def callback(
             return _frontend_redirect(error=str(link_error))
 
         token = jwt_service.create_access_token(user.id, provider, profile.nickname)
-        session_store.set_active_token(token)
+        await session_store.set_active_token(token)
         logger.info(
             "social link success: provider=%s user_id=%s newly_linked=%s", provider, user.id, newly_linked
         )
@@ -159,7 +159,7 @@ async def callback(
         birthyear=profile.birthyear,
     )
     token = jwt_service.create_access_token(user.id, provider, profile.nickname)
-    session_store.set_active_token(token)
+    await session_store.set_active_token(token)
     logger.info("social login success: provider=%s user_id=%s is_new=%s", provider, user.id, is_new)
 
     return _frontend_redirect(

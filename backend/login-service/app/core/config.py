@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     postgres_user: str = ""
     postgres_password: str = ""
 
+    # 세션/OAuth state/rate-limit 저장용 (app/services/*_store.py, rate_limiter.py)
+    redis_host: str = "localhost"
+    redis_port: int = 6379
+
     @property
     def database_url(self) -> str:
         user = quote_plus(self.postgres_user)
