@@ -12,6 +12,11 @@
 #
 # retention은 index period가 24h여야만 동작한다(Loki 공식 요구사항) - 기본 schema_config가
 # 이미 24h라 별도 변경 불필요.
+#
+# 배포 중 실제로 겪은 실수: 기본 번들 설정을 그대로 베낀 `querier.engine.
+# enable_multi_variant_queries` 필드가 실제 3.5.7 이미지에는 없는 필드라
+# "field not found in type logql.EngineOpts" 에러로 Loki가 크래시루프에 빠졌음
+# (docker logs로 직접 확인) - 우리 목적(retention)과 무관한 필드라 제거함.
 
 auth_enabled: false
 
@@ -78,7 +83,3 @@ ruler:
 
 frontend:
   encoding: protobuf
-
-querier:
-  engine:
-    enable_multi_variant_queries: true
