@@ -4,6 +4,22 @@ on:
   push:
   pull_request:
     branches: [main]
+  # production VM(재헌님이 이미 구축, 192.168.0.13)에 올리는 실제 배포는 병합 자동
+  # 트리거로 두지 않는다 - "production"이라는 이름 그대로 실제 서비스 대상이고, 마감
+  # 직전 무단 자동배포는 리스크가 커서 사람이 직접 실행(승인)하는 workflow_dispatch로만
+  # 둔다(2026-07-18, 지훈 지시). tag 입력이 없으면 production의 기본 태그(latest)를 쓴다.
+  workflow_dispatch:
+    inputs:
+      backend_tag:
+        description: '백엔드 배포 태그 (비우면 latest)'
+        required: false
+        default: 'latest'
+      frontend_tag:
+        # frontend compose는 불변 태그를 요구해서(immutable tag) latest를 기본으로
+        # 안 두고, 비우면 이번 워크플로 실행의 커밋 sha를 쓴다(job 내부에서 처리).
+        description: '프론트 배포 태그 (비우면 현재 커밋 sha)'
+        required: false
+        default: ''
 
 # 같은 브랜치에 연달아 push되면 deploy job이 harbor VM에 동시에 두 번 돌 수 있어서
 # (docker compose up이 겹치는 배포 사고로 이어질 수 있음), main push에서는 순차 실행을
@@ -286,77 +302,72 @@ jobs:
           registry: harbor.hizero.local
           username: ${{ secrets.HARBOR_ROBOT_USER }}
           password: ${{ secrets.HARBOR_ROBOT_TOKEN }}
-      - name: Tag and push (sha + stable)
+      # 재헌님이 이미 만들어 운영 중인 production VM(192.168.0.13)의
+      # ~/backend/docker-compose.yaml이 기대하는 이미지 경로/태그 컨벤션을 그대로
+      # 따른다(harbor VM 자체 대상으로 별도 경로/포트를 새로 만들었다가, 이미 잘
+      # 돌아가는 실제 배포와 안 맞는 병렬 파이프라인이 되는 걸 확인하고 되돌림 -
+      # 2026-07-18). :latest는 그 compose 파일의 기본값과 맞추기 위함이고, :sha는
+      # 추적/롤백용으로 같이 남긴다.
+      - name: Tag and push (sha + latest)
         run: |
-          IMAGE="harbor.hizero.local/dangdang/backend-${{ matrix.service }}"
+          IMAGE="harbor.hizero.local/dangdang-backend/${{ matrix.service }}"
           SHA="${{ github.sha }}"
           LOCAL="backend-${{ matrix.service }}:$SHA"
           docker tag "$LOCAL" "$IMAGE:$SHA"
-          docker tag "$LOCAL" "$IMAGE:stable"
+          docker tag "$LOCAL" "$IMAGE:latest"
           docker push "$IMAGE:$SHA"
-          docker push "$IMAGE:stable"
+          docker push "$IMAGE:latest"
 
-  # main 병합 시에만 배포한다(PR은 배포하지 않음). backend-image-scanning이 이번 커밋에서
-  # 바뀐 서비스가 없어 스킵되면(needs 기본 동작) 이 job도 자동으로 스킵된다 - 바뀐 게
-  # 없으면 재배포할 것도 없으므로 의도된 동작이다. 8개 서비스를 한 스택으로 묶어
-  # docker compose로 한 번에 pull/up하고, 실패 시 이전 :stable 이미지 digest로 되돌린다.
-  backend-deploy:
-    needs: backend-image-scanning
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+  # production VM(192.168.0.13, 재헌님이 이미 구축)에 실제로 배포한다. 이 job은
+  # self-hosted 러너(harbor VM)에서 실행되지만 harbor VM 자신의 Docker가 아니라
+  # SSH로 production VM에 접속해 그쪽의 기존 docker-compose.yaml을 그대로 pull/up
+  # 한다 - 이미지/네트워크/헬스체크 스크립트를 이 저장소에 새로 만들지 않고 이미
+  # 검증된 재헌님의 구성을 그대로 재사용한다. workflow_dispatch로만 실행되므로
+  # (on: 블록 참고) 병합만으로는 절대 트리거되지 않는다 - 사람이 Actions 탭에서
+  # 직접 실행 버튼을 누르는 것 자체가 승인 절차다.
+  backend-deploy-production:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: self-hosted
     env:
       SERVICES: >-
         admin-service community-service diet-service ingredients-service
         login-service main-service product-service recipe-service
+      PROD_HOST: bruce@192.168.0.13
+      TAG: ${{ inputs.backend_tag }}
     steps:
-      # v4
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-      - name: Log in to Harbor
-        # v3
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
-        with:
-          registry: harbor.hizero.local
-          username: ${{ secrets.HARBOR_ROBOT_USER }}
-          password: ${{ secrets.HARBOR_ROBOT_TOKEN }}
-      - name: Write runtime .env
-        working-directory: infra/backend
+      - name: Record previous tag
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
         run: |
-          cat > .env <<EOF
-          POSTGRES_HOST=${{ secrets.POSTGRES_HOST }}
-          POSTGRES_PORT=${{ secrets.POSTGRES_PORT }}
-          POSTGRES_DB=${{ secrets.POSTGRES_DB }}
-          POSTGRES_USER=${{ secrets.POSTGRES_USER }}
-          POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
-          REDIS_HOST=${{ secrets.REDIS_HOST }}
-          REDIS_PORT=${{ secrets.REDIS_PORT }}
-          JWT_SECRET=${{ secrets.JWT_SECRET }}
-          EOF
-      - name: Record previous stable digests
-        working-directory: infra/backend
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
+          PREV=$($SSH "cat ~/backend/.last-deployed-tag 2>/dev/null" || true)
+          echo "PREV_TAG=$PREV" >> "$GITHUB_ENV"
+          echo "Previous deployed tag: ${PREV:-<none>}"
+      - name: Deploy via Docker Compose (SSH)
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
         run: |
-          mkdir -p ~/backend-state
-          for s in $SERVICES; do
-            IMAGE="harbor.hizero.local/dangdang/backend-$s:stable"
-            docker inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null \
-              > ~/backend-state/"$s".prev-digest || true
-          done
-      - name: Deploy via Docker Compose
-        working-directory: infra/backend
-        run: |
-          docker compose pull
-          docker compose up -d
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
+          CMD="cd ~/backend"
+          CMD="$CMD && TAG=$TAG docker compose -f docker-compose.yaml pull"
+          CMD="$CMD && TAG=$TAG docker compose -f docker-compose.yaml up -d"
+          $SSH "$CMD"
       - name: Health check
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
         run: |
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
           declare -A PORTS=(
-            [admin-service]=8001 [community-service]=8002 [diet-service]=8003
-            [ingredients-service]=8004 [login-service]=8005 [main-service]=8006
-            [product-service]=8007 [recipe-service]=8008
+            [admin-service]=8008 [community-service]=8012 [diet-service]=8020
+            [ingredients-service]=8018 [login-service]=8000 [main-service]=8010
+            [product-service]=8016 [recipe-service]=8014
           )
           for s in $SERVICES; do
             PORT="${PORTS[$s]}"
             OK=""
             for i in $(seq 1 10); do
-              if curl -fs "http://localhost:$PORT/health" >/dev/null; then
+              CHECK="curl -fs http://localhost:$PORT/health"
+              if $SSH "$CHECK" >/dev/null 2>&1; then
                 OK=1
                 break
               fi
@@ -368,18 +379,27 @@ jobs:
             fi
           done
           echo "All backend services healthy"
-      - name: Rollback failed services on failed health check
+      - name: Rollback on failed health check
         if: failure()
-        working-directory: infra/backend
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
         run: |
-          for s in $SERVICES; do
-            PREV=$(cat ~/backend-state/"$s".prev-digest 2>/dev/null || true)
-            if [ -n "$PREV" ]; then
-              IMAGE="harbor.hizero.local/dangdang/backend-$s"
-              docker tag "$PREV" "$IMAGE:stable"
-            fi
-          done
-          docker compose up -d
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
+          if [ -n "$PREV_TAG" ]; then
+            echo "Rolling back to previous tag: $PREV_TAG"
+            CMD="cd ~/backend && TAG=$PREV_TAG"
+            CMD="$CMD docker compose -f docker-compose.yaml up -d"
+            $SSH "$CMD"
+          else
+            echo "No previous tag recorded - nothing to roll back to"
+          fi
+      - name: Record this deploy as last-deployed
+        if: success()
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
+        run: |
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
+          $SSH "echo $TAG > ~/backend/.last-deployed-tag"
 
   # frontend/ 이미지 빌드+스캔+push. 백엔드와 동일한 :sha/:stable 이중 태그 전략을 쓴다.
   # 배포(frontend-deploy)는 b-gateway 실제 배포 위치/네트워크 구성이 팀 확인 중이라
@@ -441,75 +461,125 @@ jobs:
           docker push "$IMAGE:$SHA"
           docker push "$IMAGE:latest"
 
-  # frontend/compose.production.example.yaml(성애님 작성) 기준으로 배포한다. 이 파일은
-  # dangdang-edge를 external 네트워크로 기대한다 - frontend와 b-gateway가 같은 네트워크에
-  # 있어야 frontend 컨테이너 안에서 http://b-gateway:8080이 열리기 때문(문서 기준).
-  # b-gateway 자체는 이 저장소에 없고 현재 --network host로 별도 실행 중이라는 것까지만
-  # 확인됨 - 실제 이미지/배포 설정은 팀 확인 후 별도 반영 예정이라, 지금은 frontend
-  # 컨테이너와 네트워크까지만 완성해둔다. FRONTEND_IMAGE/PUBLIC_APP_URL은 Secrets에서 온다.
-  frontend-deploy:
-    needs: frontend-image-scanning
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+  # frontend도 backend-deploy-production과 같은 이유로 production VM(192.168.0.13)에
+  # SSH로 배포한다 - frontend가 dangdang-edge에서 b-gateway:8080에 닿으려면 같은
+  # Docker 호스트/네트워크에 있어야 하는데, harbor VM은 그 네트워크가 아니다.
+  # workflow_dispatch로만 실행(자동 배포 아님, 사람이 승인=실행).
+  frontend-deploy-production:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: self-hosted
+    env:
+      PROD_HOST: bruce@192.168.0.13
+      FRONTEND_TAG: ${{ inputs.frontend_tag }}
     steps:
       # v4
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-      - name: Log in to Harbor
-        # v3
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
-        with:
-          registry: harbor.hizero.local
-          username: ${{ secrets.HARBOR_ROBOT_USER }}
-          password: ${{ secrets.HARBOR_ROBOT_TOKEN }}
-      - name: Ensure dangdang-edge network exists
+      - name: Determine tag
         run: |
-          docker network inspect dangdang-edge >/dev/null 2>&1 \
-            || docker network create dangdang-edge
-      - name: Record previous stable digest
-        run: |
-          mkdir -p ~/frontend-state
-          docker inspect --format '{{.Id}}' \
-            harbor.hizero.local/dangdang/frontend:stable 2>/dev/null \
-            > ~/frontend-state/prev-digest || true
-      - name: Deploy via Docker Compose
-        working-directory: frontend
+          TAG="$FRONTEND_TAG"
+          if [ -z "$TAG" ]; then TAG="${{ github.sha }}"; fi
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+      - name: Copy compose file to production VM
         env:
-          FRONTEND_IMAGE: harbor.hizero.local/dangdang/frontend:stable
-          PUBLIC_APP_URL: ${{ secrets.PUBLIC_APP_URL }}
-          BACKEND_GATEWAY_URL: ${{ secrets.BACKEND_GATEWAY_URL }}
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
         run: |
-          docker compose -f compose.production.example.yaml pull
-          docker compose -f compose.production.example.yaml up -d
-      - name: Health check
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
+          SCP="sshpass -e scp -o StrictHostKeyChecking=accept-new"
+          $SSH "mkdir -p ~/frontend"
+          $SCP frontend/compose.production.example.yaml \
+            "$PROD_HOST":~/frontend/docker-compose.yaml
+      - name: Ensure dangdang-edge network exists
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
         run: |
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
+          $SSH "docker network inspect dangdang-edge >/dev/null 2>&1 \
+            || docker network create dangdang-edge"
+      - name: Record previous tag
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
+        run: |
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
+          PREV=$($SSH "cat ~/frontend/.last-deployed-tag 2>/dev/null" || true)
+          echo "PREV_TAG=$PREV" >> "$GITHUB_ENV"
+          echo "Previous deployed tag: ${PREV:-<none>}"
+      - name: Log in to Harbor (production VM)
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
+        run: |
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
+          $SSH "docker login harbor.hizero.local \
+            -u '${{ secrets.HARBOR_ROBOT_USER }}' \
+            -p '${{ secrets.HARBOR_ROBOT_TOKEN }}'"
+      - name: Deploy via Docker Compose (SSH)
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
+        run: |
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
+          IMAGE="harbor.hizero.local/dangdang/frontend:$TAG"
+          PUB="${{ secrets.PUBLIC_APP_URL }}"
+          GW="${{ secrets.BACKEND_GATEWAY_URL }}"
+          CMD="cd ~/frontend && FRONTEND_IMAGE=$IMAGE"
+          CMD="$CMD PUBLIC_APP_URL='$PUB' BACKEND_GATEWAY_URL='$GW'"
+          CMD="$CMD docker compose -f docker-compose.yaml pull"
+          CMD="$CMD && FRONTEND_IMAGE=$IMAGE PUBLIC_APP_URL='$PUB'"
+          CMD="$CMD BACKEND_GATEWAY_URL='$GW'"
+          CMD="$CMD docker compose -f docker-compose.yaml up -d"
+          $SSH "$CMD"
+      - name: Health check (container status + /b/search via gateway)
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
+        run: |
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
           FMT='{{.State.Health.Status}}'
-          NAME=dangdang-frontend
+          OK=""
           for i in $(seq 1 10); do
-            STATUS=$(docker inspect --format "$FMT" "$NAME" 2>/dev/null || true)
+            STATUS=$($SSH "docker inspect --format '$FMT' dangdang-frontend" \
+              2>/dev/null || true)
             if [ "$STATUS" = "healthy" ]; then
-              echo "Health check passed"
-              exit 0
+              OK=1
+              break
             fi
-            echo "Health check attempt $i: $STATUS, retrying in 3s..."
             sleep 3
           done
-          echo "Health check failed after retries"
-          exit 1
+          if [ -z "$OK" ]; then
+            echo "Container health check failed"
+            exit 1
+          fi
+          echo "Container healthy, checking /b/search?page=1 via gateway..."
+          CHECK="node -e \"fetch('http://127.0.0.1:3000/b/search?page=1')"
+          CHECK="$CHECK .then(r=>{if(!r.ok)process.exit(1)})"
+          CHECK="$CHECK .catch(()=>process.exit(1))\""
+          if ! $SSH "docker exec dangdang-frontend $CHECK"; then
+            echo "/b/search?page=1 check failed (gateway/backend routing)"
+            exit 1
+          fi
+          echo "All checks passed"
       - name: Rollback on failed health check
         if: failure()
-        working-directory: frontend
         env:
-          PUBLIC_APP_URL: ${{ secrets.PUBLIC_APP_URL }}
-          BACKEND_GATEWAY_URL: ${{ secrets.BACKEND_GATEWAY_URL }}
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
         run: |
-          PREV=$(cat ~/frontend-state/prev-digest 2>/dev/null || true)
-          if [ -n "$PREV" ]; then
-            docker tag "$PREV" harbor.hizero.local/dangdang/frontend:stable
-            FRONTEND_IMAGE=harbor.hizero.local/dangdang/frontend:stable \
-              docker compose -f compose.production.example.yaml up -d
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
+          if [ -n "$PREV_TAG" ]; then
+            echo "Rolling back to previous tag: $PREV_TAG"
+            IMAGE="harbor.hizero.local/dangdang/frontend:$PREV_TAG"
+            PUB="${{ secrets.PUBLIC_APP_URL }}"
+            GW="${{ secrets.BACKEND_GATEWAY_URL }}"
+            CMD="cd ~/frontend && FRONTEND_IMAGE=$IMAGE"
+            CMD="$CMD PUBLIC_APP_URL='$PUB' BACKEND_GATEWAY_URL='$GW'"
+            CMD="$CMD docker compose -f docker-compose.yaml up -d"
+            $SSH "$CMD"
           else
-            echo "No previous good tag recorded - nothing to roll back to"
+            echo "No previous tag recorded - nothing to roll back to"
           fi
+      - name: Record this deploy as last-deployed
+        if: success()
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
+        run: |
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
+          $SSH "echo $TAG > ~/frontend/.last-deployed-tag"
 
   # PR을 여는 것만으로 실제 서버에 배포되면 안 되므로, main에 push(=병합)된 경우에만 배포한다.
   # github.event (객체)가 아니라 github.event_name (문자열)으로 비교해야 한다 - 공식 문서/이슈에서
@@ -575,8 +645,8 @@ jobs:
       - backend-image-scanning
       - frontend-image-scanning
       - deploy
-      - backend-deploy
-      - frontend-deploy
+      - backend-deploy-production
+      - frontend-deploy-production
     if: failure()
     runs-on: ubuntu-latest
     steps:
@@ -591,8 +661,8 @@ jobs:
           BACKEND_SCAN_RESULT: ${{ needs.backend-image-scanning.result }}
           FRONTEND_SCAN_RESULT: ${{ needs.frontend-image-scanning.result }}
           DEPLOY_RESULT: ${{ needs.deploy.result }}
-          BACKEND_DEPLOY_RESULT: ${{ needs.backend-deploy.result }}
-          FRONTEND_DEPLOY_RESULT: ${{ needs.frontend-deploy.result }}
+          BACKEND_DEPLOY_RESULT: ${{ needs.backend-deploy-production.result }}
+          FRONTEND_DEPLOY_RESULT: ${{ needs.frontend-deploy-production.result }}
         run: |
           REPO_URL="${{ github.server_url }}/${{ github.repository }}"
           RUN_URL="$REPO_URL/actions/runs/${{ github.run_id }}"
@@ -625,7 +695,7 @@ jobs:
           fi
           [ "$DEPLOY_RESULT" = "failure" ] && add_failed "deploy"
           if [ "$BACKEND_DEPLOY_RESULT" = "failure" ]; then
-            add_failed "backend-deploy"
+            add_failed "backend-deploy-production"
           fi
           if [ "$FRONTEND_DEPLOY_RESULT" = "failure" ]; then
             add_failed "frontend-deploy"
