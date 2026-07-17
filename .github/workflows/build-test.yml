@@ -11,6 +11,7 @@ on:
 # 반면 PR에 커밋을 연달아 push하는 경우는 배포가 아니라서 취소해도 안전한데, 기존엔
 # false를 전체에 고정해둬서 옛 커밋의 실행이 self-hosted 러너 1대를 계속 붙잡고 있었다
 # (공식 문서: cancel-in-progress는 github.ref/event_name 기준 조건식으로 다르게 줄 수 있음 -
+# yamllint disable-line rule:line-length
 # https://docs.github.com/actions/using-workflows/control-the-concurrency-of-workflows-and-jobs).
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -21,11 +22,14 @@ env:
 
 # GITHUB_TOKEN 기본 권한을 워크플로 파일에 명시적으로 최소화한다. 저장소 설정(현재 read)에만
 # 의존하면, 나중에 누군가 저장소 기본값을 write로 바꿀 때 이 워크플로도 같이 영향을 받는다 -
-# 공식 하드닝 가이드 권고(그 어떤 job도 PR 코멘트/릴리스 생성/GITHUB_TOKEN으로 push 등 쓰기
-# 작업을 하지 않으므로 read만으로 충분):
+# 공식 하드닝 가이드 권고. pull-requests: read는 dorny/paths-filter가 PR의 변경 파일
+# 목록을 GitHub API로 조회할 때 필요(처음엔 안 넣었다가 "Resource not accessible by
+# integration" 에러로 실제 PR 실행에서 확인 후 추가함):
+# yamllint disable-line rule:line-length
 # https://docs.github.com/actions/security-guides/security-hardening-for-github-actions
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   # backend/ 디렉터리 존재 여부를 먼저 체크아웃해서 확인한다. job 레벨 if:는 체크아웃 전
@@ -38,7 +42,8 @@ jobs:
       exists: ${{ steps.check.outputs.exists }}
       services: ${{ steps.filter.outputs.changes }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      # v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - id: check
         run: |
           if [ -d backend ] && [ -n "$(find backend -type f | head -1)" ]; then
@@ -51,7 +56,8 @@ jobs:
       # 8개 전부 다시 빌드+Trivy 스캔을 돌려서, self-hosted 러너 1대에 큐가 쌓여 실제로
       # 51분까지 걸린 적이 있었음(2026-07-16 직접 확인) - dorny/paths-filter(변경 경로 기반
       # 매트릭스 생성의 공식 예시 패턴)로 필요한 것만 돌리게 줄인다.
-      - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4
+      # v4
+      - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706
         id: filter
         if: steps.check.outputs.exists == 'true'
         with:
@@ -69,9 +75,11 @@ jobs:
   build-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      # v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        # v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
           cache: 'pip'
@@ -99,9 +107,11 @@ jobs:
       matrix:
         service: ${{ fromJSON(needs.detect-backend.outputs.services) }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      # v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        # v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
           cache: 'pip'
@@ -117,9 +127,11 @@ jobs:
     needs: build-test
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      # v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - name: SonarQube scan
-        uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602 # v6
+        # v6
+        uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602  # yamllint disable-line rule:line-length
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
@@ -137,10 +149,13 @@ jobs:
     needs: build-test
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      # v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      # v4
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # yamllint disable-line rule:line-length
       - name: Build image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        # v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
           context: .
           pull: true
@@ -149,13 +164,15 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Trivy vulnerability scan
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        # v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
         with:
           image-ref: ${{ env.IMAGE_NAME }}:${{ github.sha }}
           severity: 'CRITICAL,HIGH'
           exit-code: '1'
       - name: Log in to Harbor
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        # v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
           registry: harbor.hizero.local
           username: ${{ secrets.HARBOR_ROBOT_USER }}
@@ -178,10 +195,13 @@ jobs:
       matrix:
         service: ${{ fromJSON(needs.detect-backend.outputs.services) }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      # v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      # v4
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # yamllint disable-line rule:line-length
       - name: Build image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        # v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
           context: backend/${{ matrix.service }}
           pull: true
@@ -190,7 +210,8 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
       - name: Trivy vulnerability scan
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        # v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
         with:
           image-ref: backend-${{ matrix.service }}:${{ github.sha }}
           severity: 'CRITICAL,HIGH'
@@ -204,9 +225,11 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      # v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - name: Log in to Harbor
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        # v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
           registry: harbor.hizero.local
           username: ${{ secrets.HARBOR_ROBOT_USER }}
