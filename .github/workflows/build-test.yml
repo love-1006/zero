@@ -488,6 +488,10 @@ jobs:
           $SSH "mkdir -p ~/frontend"
           $SCP frontend/compose.production.example.yaml \
             "$PROD_HOST":~/frontend/docker-compose.yaml
+          # TEMPORARY (infra/frontend/compose.lan-test-override.yaml 헤더 참고) -
+          # 실제 도메인/edge proxy 생기면 이 스텝과 override 파일을 삭제할 것.
+          $SCP infra/frontend/compose.lan-test-override.yaml \
+            "$PROD_HOST":~/frontend/compose.lan-test-override.yaml
       - name: Ensure dangdang-edge network exists
         env:
           SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
@@ -519,12 +523,13 @@ jobs:
           IMAGE="harbor.hizero.local/dangdang/frontend:$TAG"
           PUB="${{ secrets.PUBLIC_APP_URL }}"
           GW="${{ secrets.BACKEND_GATEWAY_URL }}"
+          FILES="-f docker-compose.yaml -f compose.lan-test-override.yaml"
           CMD="cd ~/frontend && FRONTEND_IMAGE=$IMAGE"
           CMD="$CMD PUBLIC_APP_URL='$PUB' BACKEND_GATEWAY_URL='$GW'"
-          CMD="$CMD docker compose -f docker-compose.yaml pull"
+          CMD="$CMD docker compose $FILES pull"
           CMD="$CMD && FRONTEND_IMAGE=$IMAGE PUBLIC_APP_URL='$PUB'"
           CMD="$CMD BACKEND_GATEWAY_URL='$GW'"
-          CMD="$CMD docker compose -f docker-compose.yaml up -d"
+          CMD="$CMD docker compose $FILES up -d"
           $SSH "$CMD"
       - name: Health check (container status + /b/search via gateway)
         env:
@@ -566,9 +571,10 @@ jobs:
             IMAGE="harbor.hizero.local/dangdang/frontend:$PREV_TAG"
             PUB="${{ secrets.PUBLIC_APP_URL }}"
             GW="${{ secrets.BACKEND_GATEWAY_URL }}"
+            FILES="-f docker-compose.yaml -f compose.lan-test-override.yaml"
             CMD="cd ~/frontend && FRONTEND_IMAGE=$IMAGE"
             CMD="$CMD PUBLIC_APP_URL='$PUB' BACKEND_GATEWAY_URL='$GW'"
-            CMD="$CMD docker compose -f docker-compose.yaml up -d"
+            CMD="$CMD docker compose $FILES up -d"
             $SSH "$CMD"
           else
             echo "No previous tag recorded - nothing to roll back to"
