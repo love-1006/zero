@@ -71,6 +71,48 @@ jobs:
             product-service: 'backend/product-service/**'
             recipe-service: 'backend/recipe-service/**'
 
+  # detect-backend와 같은 이유로 별도 job - frontend/ 존재 여부와 변경 여부를 체크아웃 후
+  # 확인해서 넘긴다(2026-07-17 성애님 frontend/ 브랜치 인수 - sungA/front/main).
+  detect-frontend:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.filter.outputs.frontend }}
+    steps:
+      # v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      # v4
+      - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706
+        id: filter
+        with:
+          filters: |
+            frontend: 'frontend/**'
+
+  # Node.js 22.15.0/npm 10.9.2 고정(프론트 인수 조건 명시값). tsc --noEmit 기반 typecheck를
+  # lint로도 겸용한다(frontend/package.json 기준, 별도 ESLint 아직 미도입).
+  frontend-build-test:
+    needs: detect-frontend
+    if: needs.detect-frontend.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      # v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Set up Node.js
+        # v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.15.0'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Typecheck
+        working-directory: frontend
+        run: npm run typecheck
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+
   # 내부망 접근이 필요 없는 단계 - GitHub 클라우드 러너에서 실행
   build-test:
     runs-on: ubuntu-latest
@@ -226,6 +268,53 @@ jobs:
           exit-code: '1'
           cache-dir: /home/bruce/.trivy-cache/${{ runner.name }}
 
+  # frontend/ 이미지 빌드+스캔+push. 백엔드와 동일한 :sha/:stable 이중 태그 전략을 쓴다.
+  # 배포(frontend-deploy)는 b-gateway 실제 배포 위치/네트워크 구성이 팀 확인 중이라
+  # 아직 추가하지 않았다 - 이 job까지는 대상 VM과 무관하게 지금 완성할 수 있다.
+  frontend-image-scanning:
+    needs: [detect-frontend, build-test]
+    if: needs.detect-frontend.outputs.changed == 'true'
+    runs-on: self-hosted
+    steps:
+      # v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      # v4
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # yamllint disable-line rule:line-length
+      - name: Build image
+        # v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        with:
+          context: frontend
+          file: frontend/Dockerfile
+          pull: true
+          tags: frontend:${{ github.sha }}
+          load: true
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+      - name: Trivy vulnerability scan
+        # v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          image-ref: frontend:${{ github.sha }}
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+          cache-dir: /home/bruce/.trivy-cache/${{ runner.name }}
+      - name: Log in to Harbor
+        # v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: harbor.hizero.local
+          username: ${{ secrets.HARBOR_ROBOT_USER }}
+          password: ${{ secrets.HARBOR_ROBOT_TOKEN }}
+      - name: Tag and push (sha + stable)
+        run: |
+          IMAGE="harbor.hizero.local/dangdang/frontend"
+          SHA="${{ github.sha }}"
+          docker tag "frontend:$SHA" "$IMAGE:$SHA"
+          docker tag "frontend:$SHA" "$IMAGE:stable"
+          docker push "$IMAGE:$SHA"
+          docker push "$IMAGE:stable"
+
   # PR을 여는 것만으로 실제 서버에 배포되면 안 되므로, main에 push(=병합)된 경우에만 배포한다.
   # github.event (객체)가 아니라 github.event_name (문자열)으로 비교해야 한다 - 공식 문서/이슈에서
   # 확인된 흔한 실수 포인트(actions/runner#950).
@@ -284,9 +373,11 @@ jobs:
     needs:
       - build-test
       - backend-build-test
+      - frontend-build-test
       - code-scanning
       - image-scanning
       - backend-image-scanning
+      - frontend-image-scanning
       - deploy
     if: failure()
     runs-on: ubuntu-latest
@@ -296,9 +387,11 @@ jobs:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           BUILD_TEST_RESULT: ${{ needs.build-test.result }}
           BACKEND_TEST_RESULT: ${{ needs.backend-build-test.result }}
+          FRONTEND_TEST_RESULT: ${{ needs.frontend-build-test.result }}
           CODE_SCANNING_RESULT: ${{ needs.code-scanning.result }}
           IMAGE_SCANNING_RESULT: ${{ needs.image-scanning.result }}
           BACKEND_SCAN_RESULT: ${{ needs.backend-image-scanning.result }}
+          FRONTEND_SCAN_RESULT: ${{ needs.frontend-image-scanning.result }}
           DEPLOY_RESULT: ${{ needs.deploy.result }}
         run: |
           REPO_URL="${{ github.server_url }}/${{ github.repository }}"
@@ -317,12 +410,18 @@ jobs:
           if [ "$BACKEND_TEST_RESULT" = "failure" ]; then
             add_failed "backend-build-test"
           fi
+          if [ "$FRONTEND_TEST_RESULT" = "failure" ]; then
+            add_failed "frontend-build-test"
+          fi
           [ "$CODE_SCANNING_RESULT" = "failure" ] && add_failed "code-scanning"
           if [ "$IMAGE_SCANNING_RESULT" = "failure" ]; then
             add_failed "image-scanning"
           fi
           if [ "$BACKEND_SCAN_RESULT" = "failure" ]; then
             add_failed "backend-image-scanning"
+          fi
+          if [ "$FRONTEND_SCAN_RESULT" = "failure" ]; then
+            add_failed "frontend-image-scanning"
           fi
           [ "$DEPLOY_RESULT" = "failure" ] && add_failed "deploy"
           TEXT=":x: *${FAILED_JOBS^}* failed on \`$BRANCH\` ($SHA)"
