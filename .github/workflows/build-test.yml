@@ -195,6 +195,7 @@ jobs:
         run: |
           SOURCES="ci_sandbox"
           [ -d frontend ] && SOURCES="$SOURCES,frontend"
+          [ -d backend ] && SOURCES="$SOURCES,backend"
           echo "sources=$SOURCES" >> "$GITHUB_OUTPUT"
       - name: SonarQube scan
         # v6
@@ -204,6 +205,15 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+      # 배포 승인 절차(workflow_dispatch)를 없애고 push 시 자동 배포로 바꾸면서
+      # (2026-07-18, 지훈 지시 - "그 대신 CI를 신중하게"), 지금까지는 스캔만 하고
+      # 결과를 강제하지 않던 SonarQube를 실제 게이트로 승격한다. 이 스텝 전까지는
+      # Quality Gate가 실패해도 code-scanning job 자체는 초록불이었다.
+      - name: SonarQube Quality Gate check
+        # v1.2.0
+        uses: SonarSource/sonarqube-quality-gate-action@cf038b0e0cdecfa9e56c198bbb7d21d751d62c3b  # yamllint disable-line rule:line-length
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
   # code-scanning(SonarQube, 소스 대상)과 image-scanning(Trivy, 빌드된 이미지 대상)은 서로
   # 결과를 안 쓰는데 지금까지 순차 실행이었다 - build-test 성공 후 병렬로 돌려도 되는 걸
@@ -351,8 +361,27 @@ jobs:
   # 검증된 재헌님의 구성을 그대로 재사용한다. workflow_dispatch로만 실행되므로
   # (on: 블록 참고) 병합만으로는 절대 트리거되지 않는다 - 사람이 Actions 탭에서
   # 직접 실행 버튼을 누르는 것 자체가 승인 절차다.
+  # 배포 승인(workflow_dispatch 전용) 게이트를 없애고 main push 시 자동 배포로
+  # 바꾼다(2026-07-18, 지훈 지시 - "그 대신 CI를 신중하게"). 그래서 code-scanning
+  # (SonarQube Quality Gate 하드게이트 포함)까지 needs에 넣어, 정적분석이 실패하면
+  # 배포 자체가 안 되게 한다. workflow_dispatch는 이전 태그로 수동 재배포/롤백용으로
+  # 계속 남겨둔다.
   backend-deploy-production:
-    if: github.event_name == 'workflow_dispatch'
+    needs: [backend-image-scanning, code-scanning]
+    # always()가 없으면 needs 잡이 skip될 때(예: 이번 커밋에 backend 변경 없음) 이
+    # job도 평가 없이 그냥 skip돼서, workflow_dispatch로 수동 롤백하려고 해도
+    # 안 돌게 된다. always()로 강제 평가한 뒤, push는 두 잡이 실제로 success일
+    # 때만, workflow_dispatch는 무조건(수동 롤백은 재스캔 불필요) 허용한다.
+    if: |
+      always() &&
+      (
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          needs.backend-image-scanning.result == 'success' &&
+          needs.code-scanning.result == 'success'
+        )
+      )
     runs-on: self-hosted
     env:
       SERVICES: >-
@@ -491,8 +520,19 @@ jobs:
   # SSH로 배포한다 - frontend가 dangdang-edge에서 b-gateway:8080에 닿으려면 같은
   # Docker 호스트/네트워크에 있어야 하는데, harbor VM은 그 네트워크가 아니다.
   # workflow_dispatch로만 실행(자동 배포 아님, 사람이 승인=실행).
+  # backend-deploy-production과 같은 이유/패턴(always() 필요성 포함).
   frontend-deploy-production:
-    if: github.event_name == 'workflow_dispatch'
+    needs: [frontend-image-scanning, code-scanning]
+    if: |
+      always() &&
+      (
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          needs.frontend-image-scanning.result == 'success' &&
+          needs.code-scanning.result == 'success'
+        )
+      )
     runs-on: self-hosted
     env:
       PROD_HOST: bruce@192.168.0.13
