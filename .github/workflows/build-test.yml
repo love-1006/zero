@@ -20,6 +20,20 @@ on:
         description: '프론트 배포 태그 (비우면 현재 커밋 sha)'
         required: false
         default: ''
+      deploy_target:
+        # 2026-07-19, backend_tag만 넣고 백엔드만 수동 재배포하려 했는데
+        # frontend-deploy-production까지 무조건 같이 돌아서, frontend/가 아직
+        # main에 병합 안 된 상태에서 scp가 "파일 없음"으로 실패하는 걸 실측으로
+        # 확인(실서비스 영향은 없었지만 불필요한 실패/알람). 수동 트리거 시
+        # 어느 쪽을 배포할지 명시하게 해서 관련 없는 쪽까지 끌려나가는 걸 막는다.
+        description: '수동 배포 대상'
+        required: false
+        default: 'both'
+        type: choice
+        options:
+          - both
+          - backend
+          - frontend
 
 # 같은 브랜치에 연달아 push되면 deploy job이 harbor VM에 동시에 두 번 돌 수 있어서
 # (docker compose up이 겹치는 배포 사고로 이어질 수 있음), main push에서는 순차 실행을
@@ -300,11 +314,15 @@ jobs:
     # always()가 없으면 needs 잡이 skip될 때(예: 이번 커밋에 backend 변경 없음) 이
     # job도 평가 없이 그냥 skip돼서, workflow_dispatch로 수동 롤백하려고 해도
     # 안 돌게 된다. always()로 강제 평가한 뒤, push는 두 잡이 실제로 success일
-    # 때만, workflow_dispatch는 무조건(수동 롤백은 재스캔 불필요) 허용한다.
+    # 때만, workflow_dispatch는 deploy_target이 backend/both일 때만 허용한다
+    # (2026-07-19, frontend/가 main에 없는 상태에서 backend만 수동 재배포하려다
+    # frontend-deploy-production까지 같이 돌아 scp 실패하는 걸 실측 - 대상 분리).
     if: |
       always() &&
       (
-        github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'workflow_dispatch' &&
+          (inputs.deploy_target == 'backend' ||
+            inputs.deploy_target == 'both')) ||
         (
           github.event_name == 'push' && github.ref == 'refs/heads/main' &&
           needs.backend-image-scanning.result == 'success' &&
@@ -455,10 +473,15 @@ jobs:
   # 트리거/always() 필요성은 backend-deploy-production과 동일(위 주석 참고).
   frontend-deploy-production:
     needs: [frontend-image-scanning, code-scanning]
+    # workflow_dispatch는 deploy_target이 frontend/both일 때만 허용(backend-
+    # deploy-production 주석의 2026-07-19 근거 참고 - 대상 분리로 불필요한
+    # scp 실패/알람 방지).
     if: |
       always() &&
       (
-        github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'workflow_dispatch' &&
+          (inputs.deploy_target == 'frontend' ||
+            inputs.deploy_target == 'both')) ||
         (
           github.event_name == 'push' && github.ref == 'refs/heads/main' &&
           needs.frontend-image-scanning.result == 'success' &&
