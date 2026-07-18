@@ -303,7 +303,11 @@ jobs:
       SERVICES: >-
         admin-service community-service diet-service ingredients-service
         login-service main-service product-service recipe-service
-      PROD_HOST: bruce@192.168.0.13
+      # 2026-07-19 아침, 구 LAN IP(192.168.0.13)가 인프라 공지("당분간 병행 유지")보다
+      # 먼저 죽은 걸 실측(ping "Destination Host Unreachable", SSH "No route to host")으로
+      # 확인 - harbor/monitoring/DB VM은 구/신 IP 둘 다 살아있는데 production VM만 먼저
+      # 끊김. 새 App 계층 IP(10.10.10.30)로 전환.
+      PROD_HOST: bruce@10.10.10.30
       TAG: ${{ inputs.backend_tag }}
     steps:
       - name: Record previous tag
@@ -449,7 +453,11 @@ jobs:
       )
     runs-on: self-hosted
     env:
-      PROD_HOST: bruce@192.168.0.13
+      # 2026-07-19 아침, 구 LAN IP(192.168.0.13)가 인프라 공지("당분간 병행 유지")보다
+      # 먼저 죽은 걸 실측(ping "Destination Host Unreachable", SSH "No route to host")으로
+      # 확인 - harbor/monitoring/DB VM은 구/신 IP 둘 다 살아있는데 production VM만 먼저
+      # 끊김. 새 App 계층 IP(10.10.10.30)로 전환.
+      PROD_HOST: bruce@10.10.10.30
       FRONTEND_TAG: ${{ inputs.frontend_tag }}
     steps:
       # v4
