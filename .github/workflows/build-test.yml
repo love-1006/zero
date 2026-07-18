@@ -298,7 +298,8 @@ jobs:
     if: |
       always() &&
       (
-        github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'workflow_dispatch' &&
+          inputs.run_prod_env_diag != 'true') ||
         (
           github.event_name == 'push' && github.ref == 'refs/heads/main' &&
           needs.backend-image-scanning.result == 'success' &&
@@ -481,7 +482,8 @@ jobs:
     if: |
       always() &&
       (
-        github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'workflow_dispatch' &&
+          inputs.run_prod_env_diag != 'true') ||
         (
           github.event_name == 'push' && github.ref == 'refs/heads/main' &&
           needs.frontend-image-scanning.result == 'success' &&
