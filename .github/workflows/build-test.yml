@@ -20,6 +20,13 @@ on:
         description: '프론트 배포 태그 (비우면 현재 커밋 sha)'
         required: false
         default: ''
+      run_prod_env_diag:
+        # 2026-07-19, DB VM IP 마이그레이션(192.168.0.54 -> 10.10.20.10)이 backend
+        # .env에 반영됐는지 확인하기 위한 임시 읽기 전용 진단 - 값 확인 끝나면 이
+        # 입력과 아래 prod-env-diag job을 통째로 제거할 것.
+        description: '(임시) production .env HOST 값 읽기 전용 진단 실행'
+        required: false
+        default: 'false'
 
 # 같은 브랜치에 연달아 push되면 deploy job이 harbor VM에 동시에 두 번 돌 수 있어서
 # (docker compose up이 겹치는 배포 사고로 이어질 수 있음), main push에서는 순차 실행을
@@ -376,6 +383,35 @@ jobs:
         run: |
           SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
           $SSH "echo $TAG > ~/backend/.last-deployed-tag"
+
+  # 임시 읽기 전용 진단 job - 위 on.workflow_dispatch.inputs.run_prod_env_diag 참고.
+  # 값 확인 끝나면 이 job 통째로 삭제할 것.
+  prod-env-diag:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.run_prod_env_diag == 'true'
+    runs-on: self-hosted
+    env:
+      PROD_HOST: bruce@10.10.10.30
+    steps:
+      - name: Read-only - list backend dir + grep HOST/PORT keys (no secrets)
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
+        run: |
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
+          echo "--- ~/backend 디렉터리 구조 ---"
+          $SSH "ls -la ~/backend"
+          echo "--- docker-compose.yaml의 env_file/environment 참조 방식 ---"
+          $SSH "grep -n 'env_file\|environment:' ~/backend/docker-compose.yaml"
+          echo "--- 각 서비스 .env의 HOST/PORT 키만 (비밀번호/토큰 제외) ---"
+          REMOTE_SCRIPT='
+            for f in $(find ~/backend -maxdepth 2 -iname "*.env*" \
+                -not -name "*.example"); do
+              echo "[$f]"
+              grep -iE "^(POSTGRES_HOST|REDIS_HOST|MONGO|KAFKA).*=" "$f"
+            done
+          '
+          $SSH "$REMOTE_SCRIPT"
 
   # frontend/ 이미지 빌드+스캔+push. 백엔드와 동일한 :sha/:latest 이중 태그 전략을 쓴다.
   # 배포는 아래 frontend-deploy-production job 참고.
