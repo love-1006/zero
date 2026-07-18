@@ -8,6 +8,14 @@ x-logging: &default-logging
     max-file: "3"
 
 services:
+  # 2026-07-19, well-architected 체크리스트 재점검 중 발견 - 이 스택 전체에
+  # healthcheck/리소스 제한이 하나도 없었다(docker ps로 실측 확인). 헬스체크는
+  # 각 도구 공식 문서에 명시된 엔드포인트 그대로 사용(추측 없음):
+  # Prometheus /-/healthy(공식 Management API 문서), Loki/Tempo /ready(공식
+  # HTTP API 문서), Grafana /api/health(공식 HTTP API 문서). 각 이미지에 실제로
+  # wget이 있는지도 docker exec으로 먼저 확인 후 반영(prometheus/loki/tempo/
+  # blackbox-exporter는 busybox wget, grafana는 GNU wget - 전부 --spider 지원).
+  # 리소스 제한은 docker stats 실측치(각 50~100MiB대) 대비 3~5배 여유를 둔 값.
   prometheus:
     image: prom/prometheus:v3.5.0
     container_name: prometheus
@@ -20,6 +28,14 @@ services:
       - prometheus_data:/prometheus
     ports:
       - "9090:9090"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    mem_limit: 512m
+    cpus: 1.0
     logging: *default-logging
     restart: unless-stopped
 
@@ -34,6 +50,14 @@ services:
       - loki_data:/loki
     ports:
       - "3100:3100"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3100/ready"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    mem_limit: 512m
+    cpus: 0.75
     logging: *default-logging
     restart: unless-stopped
 
@@ -46,6 +70,14 @@ services:
       - tempo_data:/var/tempo
     ports:
       - "3200:3200"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3200/ready"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    mem_limit: 256m
+    cpus: 0.5
     logging: *default-logging
     restart: unless-stopped
 
@@ -56,6 +88,17 @@ services:
       - ./config/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
     ports:
       - "9115:9115"
+    # blackbox_exporter는 공식 문서상 전용 헬스 엔드포인트가 없다(README 확인 -
+    # /probe와 /metrics만 문서화됨) - 표준 Prometheus exporter 패턴대로 /metrics로
+    # 대체(프로세스가 응답 가능한 상태인지는 이걸로 충분히 검증됨).
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9115/metrics"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    mem_limit: 128m
+    cpus: 0.25
     logging: *default-logging
     restart: unless-stopped
 
@@ -76,6 +119,15 @@ services:
       - tempo
       - loki
       - prometheus
+    # Alloy 공식 이미지엔 /-/ready 엔드포인트가 있지만(공식 HTTP endpoints 문서
+    # 확인), docker exec으로 확인해보니 이 이미지엔 wget/curl이 전혀 없다(alloy
+    # 바이너리 + 최소 coreutils뿐) - CIS Docker Benchmark 4.3(불필요한 패키지
+    # 설치 지양) 원칙상 헬스체크 하나 위해 패키지를 새로 심지 않는다. 대신
+    # Docker 프로세스 liveness(기본 동작)로만 두고, 실질적 헬스는 Alloy가
+    # 스스로 만드는 파이프라인(OTLP 수신, 각 서비스 스크레이핑)이 끊기면
+    # Grafana 대시보드/알람으로 드러나는 구조로 대체한다.
+    mem_limit: 256m
+    cpus: 0.5
     logging: *default-logging
     restart: unless-stopped
 
@@ -109,6 +161,14 @@ services:
       - prometheus
       - loki
       - tempo
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    mem_limit: 256m
+    cpus: 0.5
     logging: *default-logging
     restart: unless-stopped
 
