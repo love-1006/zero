@@ -69,7 +69,16 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       exists: ${{ steps.check.outputs.exists }}
-      services: ${{ steps.filter.outputs.changes }}
+      # workflow_dispatch에는 event.before(직전 커밋)가 없어서 paths-filter가
+      # 비교 기준을 못 잡고 8개 서비스 전부를 "바뀜"으로 취급한다(dorny/paths-filter
+      # 로그의 "before field is missing" 경고로 확인) - 2026-07-19, workflow_dispatch
+      # 트리거마다 불필요하게 8개 전체 재빌드+Trivy 스캔이 돌아 10~15분씩 낭비되는
+      # 걸 실측으로 확인. workflow_dispatch는 애초에 "이미 빌드된 태그로 수동
+      # 재배포/롤백"용이라 재빌드가 필요 없으므로, 이 이벤트에서는 매트릭스를
+      # 빈 배열로 강제해 backend-image-scanning을 통째로 스킵시킨다.
+      services: >-
+        ${{ github.event_name == 'workflow_dispatch' && '[]' ||
+        steps.filter.outputs.changes }}
     steps:
       # v4
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -105,7 +114,11 @@ jobs:
   detect-frontend:
     runs-on: ubuntu-latest
     outputs:
-      changed: ${{ steps.filter.outputs.frontend }}
+      # detect-backend와 같은 이유(workflow_dispatch엔 diff 기준이 없음) - 수동
+      # 트리거에서는 프론트도 재빌드 대상에서 뺀다.
+      changed: >-
+        ${{ github.event_name == 'workflow_dispatch' && 'false' ||
+        steps.filter.outputs.frontend }}
     steps:
       # v4
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
