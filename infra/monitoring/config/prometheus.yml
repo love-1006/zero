@@ -10,6 +10,13 @@ scrape_configs:
     static_configs:
       - targets: ["192.168.0.53:9100"]
 
+  # Harbor 자체 화이트박스 metrics(harbor-exporter, 2026-07-19 활성화) - blackbox의
+  # harbor_health_check(외부 관점 접속 가능 여부)와는 다른 신호. 프로젝트별 artifact
+  # 수, pull 횟수, quota 등 Harbor 내부 상태를 직접 노출한다.
+  - job_name: harbor-metrics
+    static_configs:
+      - targets: ["192.168.0.53:9090"]
+
   - job_name: db-vm
     static_configs:
       - targets: ["192.168.0.54:9100"]
