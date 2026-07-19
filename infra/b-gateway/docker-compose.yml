@@ -15,13 +15,20 @@
 #   `docker inspect b-gateway` 결과를 백업해둘 것(이미 ~/b-gateway-backup-20260718/에
 #   있음). 문제 생기면 host 모드로 원복 가능해야 한다.
 #
-# 적용 방법 (production VM에서, 사람이 직접 실행 - 최초 전환은 자동화 안 함):
+# 적용 방법 (당시엔 production VM에서 사람이 직접 실행 - 최초 host->bridge
+# 전환은 자동화 안 함):
 #   1) 이 디렉터리를 production VM의 ~/b-gateway/ 에 git pull 등으로 반영
 #   2) docker stop b-gateway && docker rm b-gateway  (기존 --network host 컨테이너 제거)
 #   3) docker network create dangdang-edge  (이미 있으면 생략)
 #   4) cd ~/b-gateway && docker compose up -d
 #   5) curl -s http://localhost:8080/b/search?page=1 로 라우팅 확인
 #   6) 문제 있으면: docker compose down 후, 백업해둔 설정으로 기존 방식 원복
+#
+# 현재 상태(2026-07-19): 위 host->bridge 전환은 완료됐고, 그 위에 non-root/
+# read-only 전환(아래 build 블록 주석 참고)까지 적용 완료. production 반영은
+# .github/workflows/build-test.yml의 bgateway-cutover job(workflow_dispatch,
+# 백업+빌드+재기동+라우트 검증+실패시 자동 롤백까지 자동화)으로 실행함 -
+# 더 이상 사람이 SSH로 직접 명령을 치지 않는다.
 services:
   b-gateway:
     # 2026-07-19, non-root 전환 - 격리 환경에서 실제 기동/resolver/temp 경로
