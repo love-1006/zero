@@ -628,9 +628,9 @@ jobs:
         run: |
           SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
           $SSH "getent hosts harbor.hizero.local"
-          $SSH "docker login harbor.hizero.local \
-            -u '${{ secrets.HARBOR_ROBOT_USER }}' \
-            -p '${{ secrets.HARBOR_ROBOT_TOKEN }}'"
+          echo "${{ secrets.HARBOR_ROBOT_TOKEN }}" | $SSH "docker login \
+            harbor.hizero.local -u '${{ secrets.HARBOR_ROBOT_USER }}' \
+            --password-stdin"
 
   # 2026-07-19, DB VM 선제 조치 일회성 job. DB VM은 harbor+monitoring VM과
   # 별개 머신이라 production과 똑같이 harbor CA를 신뢰하도록 설정된 적이
@@ -693,9 +693,10 @@ jobs:
           echo "--- docker installed? ---"
           $SSH "docker --version 2>&1 || echo '(docker not found)'"
           echo "--- attempt Harbor login (expected to fail if unconfigured) ---"
-          $SSH "docker login harbor.hizero.local \
-            -u '${{ secrets.HARBOR_ROBOT_USER }}' \
-            -p '${{ secrets.HARBOR_ROBOT_TOKEN }}' 2>&1" || true
+          TOKEN="${{ secrets.HARBOR_ROBOT_TOKEN }}"
+          USR="${{ secrets.HARBOR_ROBOT_USER }}"
+          echo "$TOKEN" | $SSH "docker login harbor.hizero.local -u '$USR' \
+            --password-stdin 2>&1" || true
       - name: Copy Harbor CA cert to DB VM home dir
         env:
           PW1: ${{ secrets.DB_VM_SSH_PASSWORD }}
@@ -755,9 +756,10 @@ jobs:
           SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new"
           SSH="$SSH $DB_USER@10.10.20.10"
           $SSH "getent hosts harbor.hizero.local"
-          $SSH "docker login harbor.hizero.local \
-            -u '${{ secrets.HARBOR_ROBOT_USER }}' \
-            -p '${{ secrets.HARBOR_ROBOT_TOKEN }}'"
+          TOKEN="${{ secrets.HARBOR_ROBOT_TOKEN }}"
+          USR="${{ secrets.HARBOR_ROBOT_USER }}"
+          echo "$TOKEN" | $SSH "docker login harbor.hizero.local -u '$USR' \
+            --password-stdin"
 
   # 2026-07-19, b-gateway production 배포 job. non-root/read-only 전환 검증차
   # 처음 추가했지만(격리 환경에서 기동/resolver/temp 경로 생성 전부 검증 완료 후
@@ -1011,9 +1013,10 @@ jobs:
           SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
         run: |
           SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
-          $SSH "docker login harbor.hizero.local \
-            -u '${{ secrets.HARBOR_ROBOT_USER }}' \
-            -p '${{ secrets.HARBOR_ROBOT_TOKEN }}'"
+          TOKEN="${{ secrets.HARBOR_ROBOT_TOKEN }}"
+          USR="${{ secrets.HARBOR_ROBOT_USER }}"
+          echo "$TOKEN" | $SSH "docker login harbor.hizero.local -u '$USR' \
+            --password-stdin"
       - name: Deploy via Docker Compose (SSH)
         env:
           SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
