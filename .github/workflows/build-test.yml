@@ -500,12 +500,23 @@ jobs:
     env:
       PROD_HOST: bruce@10.10.10.30
     steps:
-      - name: Control test - robot login from harbor VM itself
+      - name: Control test - inline -p vs --password-stdin, side by side
         run: |
-          echo "--- docker login on harbor VM (this runner), same creds ---"
+          echo "--- style A: -p '<token>' inline (matches earlier success) ---"
           docker login harbor.hizero.local \
             -u '${{ secrets.HARBOR_ROBOT_USER }}' \
             -p '${{ secrets.HARBOR_ROBOT_TOKEN }}' 2>&1 || true
+          docker logout harbor.hizero.local 2>&1 || true
+          echo "--- style B: echo | --password-stdin (used in every fix"
+          echo "    since, all failed) ---"
+          echo '${{ secrets.HARBOR_ROBOT_TOKEN }}' | docker login \
+            harbor.hizero.local -u '${{ secrets.HARBOR_ROBOT_USER }}' \
+            --password-stdin 2>&1 || true
+          docker logout harbor.hizero.local 2>&1 || true
+          echo "--- style C: printf (no newline) | --password-stdin ---"
+          printf '%s' '${{ secrets.HARBOR_ROBOT_TOKEN }}' | docker login \
+            harbor.hizero.local -u '${{ secrets.HARBOR_ROBOT_USER }}' \
+            --password-stdin 2>&1 || true
           docker logout harbor.hizero.local 2>&1 || true
       - name: Investigate DB VM 'unauthorized' - firewall on harbor VM
         run: |
