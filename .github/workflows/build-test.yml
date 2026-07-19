@@ -26,6 +26,8 @@ on:
         # main에 병합 안 된 상태에서 scp가 "파일 없음"으로 실패하는 걸 실측으로
         # 확인(실서비스 영향은 없었지만 불필요한 실패/알람). 수동 트리거 시
         # 어느 쪽을 배포할지 명시하게 해서 관련 없는 쪽까지 끌려나가는 걸 막는다.
+        # none은 bgateway-cutover처럼 backend/frontend 배포 없이 workflow_dispatch
+        # 자체만 필요한 일회성 job을 돌릴 때 씀(2026-07-19 추가).
         description: '수동 배포 대상'
         required: false
         default: 'both'
@@ -34,6 +36,7 @@ on:
           - both
           - backend
           - frontend
+          - none
       run_bgateway_cutover:
         # 2026-07-19, b-gateway non-root/read-only 전환용 임시 입력. 검증 완료 후
         # 이 입력과 아래 bgateway-cutover job은 삭제한다(prod-env-fix와 동일한
