@@ -26,6 +26,8 @@ on:
         # main에 병합 안 된 상태에서 scp가 "파일 없음"으로 실패하는 걸 실측으로
         # 확인(실서비스 영향은 없었지만 불필요한 실패/알람). 수동 트리거 시
         # 어느 쪽을 배포할지 명시하게 해서 관련 없는 쪽까지 끌려나가는 걸 막는다.
+        # none은 bgateway-cutover처럼 backend/frontend 배포 없이 workflow_dispatch
+        # 자체만 필요한 일회성 job을 돌릴 때 씀(2026-07-19 추가).
         description: '수동 배포 대상'
         required: false
         default: 'both'
@@ -34,6 +36,46 @@ on:
           - both
           - backend
           - frontend
+          - none
+      run_bgateway_cutover:
+        # 2026-07-19, b-gateway non-root/read-only 전환 검증차 처음 추가했으나
+        # prod-env-fix류 일회성 job과 달리, b-gateway는 이 job 전엔 자동화된
+        # production 배포 경로가 아예 없었다(수동 SSH뿐). backend/frontend-
+        # deploy-production과 같은 급의 상시 배포 수단으로 남긴다 - 검증 후
+        # 삭제하지 않음. push 자동 배포로 안 바꾼 이유: b-gateway는 nginx.conf
+        # 라우팅 로직이 변경 빈도가 낮고 변경 시 파급력이 커서(전체 트래픽의
+        # 유일한 진입점), backend/frontend처럼 매 push 자동 배포보다 명시적
+        # workflow_dispatch 승인을 유지하는 게 안전하다고 판단.
+        description: 'b-gateway 배포 (백업+빌드+재기동+라우트 검증, 실패시 롤백)'
+        required: false
+        default: false
+        type: boolean
+      fix_harbor_dns:
+        # 2026-07-18 frontend-deploy-production 실패 원인: production
+        # VM(10.10.10.30)에서 "lookup harbor.hizero.local ... server
+        # misbehaving" - production VM의 DNS 리졸버가 harbor.hizero.local을
+        # 못 찾는다(backend는 이미 pull된 이미지가 로컬에 있어서 이 문제를 안
+        # 겪었을 뿐, 근본 원인은 동일하게 잠재해 있었을 가능성). 2026-07-19,
+        # 지훈 지시로 정식 DNS 대신 harbor VM의 내부 IP를 production VM의
+        # /etc/hosts에 고정 등록해 우회 - 서비스가 뜨는 게 우선이라는 판단
+        # (정식 DNS 인프라는 팀 도메인 확정 이후 별도로 정리).
+        description: 'production VM에 harbor.hizero.local -> 내부IP /etc/hosts 등록'
+        required: false
+        default: false
+        type: boolean
+      check_db_vm_harbor_trust:
+        # 2026-07-19, DB VM(윤경 담당, 이 repo에 코드 없음 - 아직 yoonK/database
+        # 브랜치 자체가 없음)도 production과 같은 harbor DNS/CA 신뢰 문제를
+        # 겪을지 진단하고, production에 했던 것과 동일하게 /etc/hosts +
+        # /etc/docker/certs.d/ 를 미리 맞춰둔다(지훈 지시, 2026-07-19 - 문제
+        # 터지고 나서 고치지 말고 미리 선제 조치). DB VM은 원래 담당 범위
+        # 밖(harbor+monitoring VM만)이라 계정/비밀번호가 불확실해서 bruce/zero
+        # 계정과 팀 비밀번호 규칙 두 개(zeropass#/Zeropass#2026) 조합을 다
+        # 시도해 실제로 되는 걸 찾는다.
+        description: 'DB VM도 harbor DNS/CA 신뢰 미리 맞춤 + 진단'
+        required: false
+        default: false
+        type: boolean
 
 # 같은 브랜치에 연달아 push되면 deploy job이 harbor VM에 동시에 두 번 돌 수 있어서
 # (docker compose up이 겹치는 배포 사고로 이어질 수 있음), main push에서는 순차 실행을
@@ -196,7 +238,17 @@ jobs:
       # sonar-project.properties에 고정값을 두면, 아직 해당 디렉터리가 없는 브랜치(main에
       # sungA/front/main이 병합되기 전 등)에서 sonar-scanner가 "폴더가 없다"며 바로
       # 실패한다(실제로 확인함).
-      - name: Determine sonar sources
+      #
+      # projectKey도 여기서 브랜치별로 분리한다 - SonarQube Community Edition은 유료
+      # 브랜치 분석 기능이 없어서, sonar.branch.name을 줘도 무시되고 모든 브랜치가
+      # 같은 zerocheck 프로젝트/같은 "new code" 타임라인에 섞여 들어간다. 2026-07-19,
+      # 재헌님 브랜치 동기화 직후 push/PR 두 분석이 2초 간격으로 같은 프로젝트에
+      # 동시에 쓰다가 Quality Gate 결과가 서로 다르게 나오는 걸 실측으로 확인
+      # (Sonar API로 project_analyses 조회, 13:57:40/13:57:42 두 건 확인). main은
+      # 기존 zerocheck 프로젝트(히스토리 보존)를 그대로 쓰고, 다른 브랜치는
+      # zerocheck-branch-<브랜치명>으로 완전히 분리한다 - 새로 생기는 프로젝트가
+      # 전부 ZeroCheck Launch Gate(기본 게이트로 지정 완료)를 물려받는다.
+      - name: Determine sonar sources and project key
         id: sonar-sources
         run: |
           SOURCES=""
@@ -209,11 +261,23 @@ jobs:
             fi
           fi
           echo "sources=$SOURCES" >> "$GITHUB_OUTPUT"
+
+          BRANCH="${{ github.head_ref || github.ref_name }}"
+          if [ "$BRANCH" = "main" ]; then
+            PROJECT_KEY="zerocheck"
+          else
+            SAFE_BRANCH=$(echo "$BRANCH" | tr '/' '-' | tr -cd 'a-zA-Z0-9._-')
+            PROJECT_KEY="zerocheck-branch-$SAFE_BRANCH"
+          fi
+          echo "project_key=$PROJECT_KEY" >> "$GITHUB_OUTPUT"
       - name: SonarQube scan
         # v6
         uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602  # yamllint disable-line rule:line-length
         with:
-          args: -Dsonar.sources=${{ steps.sonar-sources.outputs.sources }}
+          args: >-
+            -Dsonar.sources=${{ steps.sonar-sources.outputs.sources }}
+            -Dsonar.projectKey=${{ steps.sonar-sources.outputs.project_key }}
+            -Dsonar.projectName=${{ steps.sonar-sources.outputs.project_key }}
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
@@ -340,8 +404,21 @@ jobs:
       # IP 둘 다 살아있는데 production VM만 먼저 끊김. 새 App 계층
       # IP(10.10.10.30)로 전환.
       PROD_HOST: bruce@10.10.10.30
-      TAG: ${{ inputs.backend_tag }}
+      BACKEND_TAG: ${{ inputs.backend_tag }}
     steps:
+      # 2026-07-19, well-architected 체크리스트의 "latest 배포 금지" 항목 재점검
+      # 중 발견 - push 이벤트에선 inputs.backend_tag가 존재하지 않아 TAG가
+      # 빈 문자열이 되고, 그 상태로 docker compose를 돌리면 production VM의
+      # compose 파일이 기본값(:latest)으로 떨어졌을 것으로 보임(frontend는
+      # 이미 이 fallback을 github.sha로 처리하고 있었는데 backend만 빠져있었다
+      # - 두 job이 같은 패턴이어야 하는데 여기만 어긋나 있었음). workflow_dispatch
+      # 수동 배포는 여전히 backend_tag 기본값 'latest'를 그대로 쓸 수 있게 유지
+      # (수동 롤백/재배포 편의) - 자동배포 경로만 불변 태그로 강제한다.
+      - name: Determine tag
+        run: |
+          TAG="$BACKEND_TAG"
+          if [ -z "$TAG" ]; then TAG="${{ github.sha }}"; fi
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
       - name: Record previous tag
         env:
           SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
@@ -407,6 +484,478 @@ jobs:
         run: |
           SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
           $SSH "echo $TAG > ~/backend/.last-deployed-tag"
+
+  # 2026-07-19, 일회성 진단+수정 job(fix_harbor_dns 입력으로만 실행). 검증 끝나면
+  # 이 job과 위 fix_harbor_dns 입력은 삭제한다(prod-env-fix와 동일 패턴) -
+  # /etc/hosts 등록은 한 번만 하면 재부팅 전까지 유지되는 영구 조치라 매번 돌 필요
+  # 없음. harbor VM 내부 IP(192.168.0.53, LAN) 또는 Tailscale IP(100.96.79.73)
+  # 중 production VM(10.10.10.30, 새 App 계층)에서 실제로 닿는 쪽을 찾아
+  # /etc/hosts에 고정한다 - 정식 DNS 대신 쓰는 임시 우회.
+  fix-harbor-dns:
+    if: |
+      always() &&
+      github.event_name == 'workflow_dispatch' &&
+      inputs.fix_harbor_dns
+    runs-on: self-hosted
+    env:
+      PROD_HOST: bruce@10.10.10.30
+    steps:
+      - name: Control test - inline -p vs --password-stdin, side by side
+        run: |
+          echo "--- style A: -p '<token>' inline (matches earlier success) ---"
+          docker login harbor.hizero.local \
+            -u '${{ secrets.HARBOR_ROBOT_USER }}' \
+            -p '${{ secrets.HARBOR_ROBOT_TOKEN }}' 2>&1 || true
+          docker logout harbor.hizero.local 2>&1 || true
+          echo "--- style B: echo | --password-stdin (used in every fix"
+          echo "    since, all failed) ---"
+          echo '${{ secrets.HARBOR_ROBOT_TOKEN }}' | docker login \
+            harbor.hizero.local -u '${{ secrets.HARBOR_ROBOT_USER }}' \
+            --password-stdin 2>&1 || true
+          docker logout harbor.hizero.local 2>&1 || true
+          echo "--- style C: printf (no newline) | --password-stdin ---"
+          printf '%s' '${{ secrets.HARBOR_ROBOT_TOKEN }}' | docker login \
+            harbor.hizero.local -u '${{ secrets.HARBOR_ROBOT_USER }}' \
+            --password-stdin 2>&1 || true
+          docker logout harbor.hizero.local 2>&1 || true
+      - name: Investigate DB VM 'unauthorized' - firewall on harbor VM
+        run: |
+          echo "--- host firewall (ufw/iptables) on harbor VM ---"
+          sudo -n ufw status verbose 2>&1 || echo "(needs sudo, skipped)"
+          sudo -n iptables -L -n 2>&1 || echo "(needs sudo, skipped)"
+          echo "--- harbor VM's own /etc/hosts (self-referencing entry?) ---"
+          grep harbor /etc/hosts || echo "(no harbor entry in own hosts)"
+          echo "--- nginx allow/deny or client-cert directives under /data ---"
+          find /data -iname "*.conf" -o -iname "*.yml" 2>/dev/null | \
+            xargs grep -l "allow \|deny \|ssl_client\|X-Real-IP" \
+            2>/dev/null || echo "(none found)"
+          echo "--- exact WWW-Authenticate challenge (capture real params) ---"
+          CHALLENGE=$(curl -sk -i https://harbor.hizero.local/v2/ \
+            | grep -i "www-authenticate")
+          echo "$CHALLENGE"
+          # 2026-07-19: 여기 있던 수동 curl -u 토큰 요청 재현 테스트는 제거함.
+          # harbor-core debug 로그로 확인한 결과, 이 curl 재현이 실패하면서
+          # robot 계정을 잠갔고(Harbor 실패 로그인 잠금 정책), 같은 job의
+          # 뒤쪽 "Verify Harbor login now works" 스텝(진짜 production
+          # docker login)이 자격증명과 무관하게 이미 잠긴 계정이라 매번
+          # 실패했던 것 - 하루 종일 재현됐던 "Invalid credentials"의
+          # 실제 원인이었음. 이 curl 재현은 애초에 실제 docker login과
+          # 다른 방식(수동 조립)이라 신뢰도도 낮았으므로 완전히 제거.
+      - name: Check for zero-user migration side effects
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
+        run: |
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
+          echo "--- does zero user exist, is it in docker group? ---"
+          $SSH "id zero 2>&1 || echo '(no zero user)'"
+          echo "--- zero's own docker config, if any ---"
+          $SSH "sudo -n ls -la /home/zero/.docker/ 2>&1 || \
+            echo '(cannot check - needs sudo or missing)'"
+          echo "--- /etc/hosts still has our harbor entry? ---"
+          $SSH "grep harbor /etc/hosts || echo '(ENTRY GONE - wiped)'"
+          echo "--- docker daemon: who owns running containers? ---"
+          $SSH "ps aux | grep -i dockerd | grep -v grep"
+          echo "--- ansible run history (any recent host-level changes?) ---"
+          $SSH "ls -la /home/zero/.ansible/ 2>&1 || true"
+      - name: Check Harbor CA trust and existing pull capability
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
+        run: |
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
+          echo "--- /etc/docker/certs.d/harbor.hizero.local/ contents ---"
+          CERT_DIR="/etc/docker/certs.d/harbor.hizero.local/"
+          $SSH "ls -la $CERT_DIR 2>&1 || echo '(directory missing)'"
+          echo "--- ca.crt content check (subject/issuer if present) ---"
+          CERT_PATH="/etc/docker/certs.d/harbor.hizero.local/ca.crt"
+          $SSH "test -f $CERT_PATH && openssl x509 -in $CERT_PATH -noout \
+            -subject -issuer || echo '(ca.crt missing or unreadable)'"
+          echo "--- can production already pull a known backend image? ---"
+          IMG="harbor.hizero.local/dangdang-backend/login-service:latest"
+          $SSH "docker pull $IMG 2>&1 | tail -5"
+          echo "--- system CA trust store check ---"
+          HOST="harbor.hizero.local"
+          OPENSSL="openssl s_client -connect $HOST:443 -servername $HOST"
+          $SSH "$OPENSSL </dev/null 2>&1 | grep -E 'verify|issuer|subject'"
+      # 원인 확인(SESSION_HANDOFF_harbor_push.md, ZeroCheck_인수인계 문서): Harbor
+      # 인증서는 자체 CA("HiZero Root CA")로 서명됐고, harbor VM(이 self-hosted
+      # 러너가 도는 바로 그 VM)에는 처음부터 이미 CA 신뢰가 설정돼 있어서
+      # (/etc/docker/certs.d/harbor.hizero.local/ca.crt) image-scanning의
+      # push가 지금까지 문제없이 됐던 것. production VM은 완전히 다른 머신이라
+      # 이 CA 신뢰가 한 번도 설정된 적이 없었다 - 지금까지 backend가 되던 건
+      # 이미 캐시된 이미지라 새로 pull이 필요 없었을 뿐, 잠재적으로 같은
+      # 문제를 안고 있었다. harbor VM 로컬 CA 인증서를 production 홈 디렉터리로
+      # 옮기는 것까지는 자동화하고, 마지막 /etc/docker/certs.d/ 배치만
+      # sudo가 필요해 사람이 해야 한다.
+      - name: Copy Harbor CA cert to production home dir
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
+        run: |
+          SCP="sshpass -e scp -o StrictHostKeyChecking=accept-new"
+          CA_LOCAL="/etc/docker/certs.d/harbor.hizero.local/ca.crt"
+          if [ ! -f "$CA_LOCAL" ]; then
+            echo "harbor VM 로컬에 $CA_LOCAL 이 없음 - 경로 재확인 필요"
+            exit 1
+          fi
+          $SCP "$CA_LOCAL" "$PROD_HOST":/home/bruce/harbor-ca.crt
+          echo "harbor VM의 CA 인증서를 production /home/bruce/harbor-ca.crt 로 복사 완료"
+      - name: Check for any existing NOPASSWD sudo rule
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
+        run: |
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
+          echo "--- sudo -n -l (no prompt; empty/denied = no NOPASSWD rule) ---"
+          $SSH "sudo -n -l" || true
+          echo "--- /etc/hosts current permissions ---"
+          $SSH "ls -la /etc/hosts"
+          echo "--- groups for current user ---"
+          $SSH "id"
+      - name: Diagnose reachable Harbor IP
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
+        run: |
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
+          echo "--- current /etc/hosts ---"
+          $SSH "cat /etc/hosts"
+          echo "--- connectivity checks ---"
+          for IP in 192.168.0.53 100.96.79.73; do
+            CHK="curl -sk -m 3 -o /dev/null -w '%{http_code}' https://$IP/v2/"
+            if $SSH "$CHK" | grep -qE '^[234]'; then
+              echo "$IP -> reachable (Harbor API responded)"
+              WORKING_IP="$IP"
+              break
+            else
+              echo "$IP -> unreachable"
+            fi
+          done
+          if [ -z "$WORKING_IP" ]; then
+            echo "No candidate IP reached Harbor API - check manually"
+            exit 1
+          fi
+          echo "WORKING_IP=$WORKING_IP" >> "$GITHUB_ENV"
+      # sudo에 비밀번호를 파이프하는 방식은 안 쓴다(passwordless sudo가 아니면
+      # 이 스텝은 권한 오류로 실패한다 - 그럴 경우 지훈이 직접 콘솔에서
+      # 한 줄만 추가하면 됨: echo "<IP> harbor.hizero.local" | sudo tee -a
+      # /etc/hosts). bruce 계정에 NOPASSWD sudo가 이미 설정돼 있다는 전제.
+      - name: Patch /etc/hosts (requires passwordless sudo)
+        id: patch-hosts
+        continue-on-error: true
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
+        run: |
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
+          CMD="sudo -n sed -i '/harbor\.hizero\.local/d' /etc/hosts"
+          CMD="$CMD && echo '$WORKING_IP harbor.hizero.local' | sudo -n tee -a"
+          CMD="$CMD /etc/hosts"
+          $SSH "$CMD"
+      - name: Patch CA trust (requires passwordless sudo)
+        id: patch-ca
+        continue-on-error: true
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
+        run: |
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
+          CMD="sudo -n mkdir -p /etc/docker/certs.d/harbor.hizero.local"
+          CMD="$CMD && sudo -n cp /home/bruce/harbor-ca.crt"
+          CMD="$CMD /etc/docker/certs.d/harbor.hizero.local/ca.crt"
+          $SSH "$CMD"
+      - name: Manual fallback if passwordless sudo unavailable
+        if: |
+          steps.patch-hosts.outcome == 'failure' ||
+          steps.patch-ca.outcome == 'failure'
+        run: |
+          echo "sudo -n failed (no NOPASSWD rule for this account)."
+          echo "production VM(10.10.10.30)에 bruce 또는 zero 계정으로 직접"
+          echo "접속해서 아래 두 줄을 실행해줘 (필요없는 건 이미 반영돼있으면"
+          echo "그냥 통과함 - idempotent):"
+          echo "  echo '$WORKING_IP harbor.hizero.local' \\"
+          echo "    | sudo tee -a /etc/hosts"
+          echo "  sudo mkdir -p /etc/docker/certs.d/harbor.hizero.local \\"
+          echo "    && sudo cp /home/bruce/harbor-ca.crt \\"
+          echo "    /etc/docker/certs.d/harbor.hizero.local/ca.crt"
+      - name: Verify Harbor login now works
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
+        run: |
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
+          $SSH "getent hosts harbor.hizero.local"
+          # 2026-07-19: GH 시크릿 표현식을 바깥쪽 큰따옴표 문자열 안에 직접
+          # 인라인하면, 그 안의 작은따옴표는 bash 문법상 아무 의미가 없어서
+          # (이미 큰따옴표 안이라 quoting 역할을 못 함) robot 계정명의 '$'가
+          # 로컬 bash에 의해 변수로 오해석/삭제됨. 반드시 별도 작은따옴표
+          # 대입으로 먼저 변수에 담은 뒤 그 변수를 참조해야 안전함.
+          TOKEN='${{ secrets.HARBOR_ROBOT_TOKEN }}'
+          USR='${{ secrets.HARBOR_ROBOT_USER }}'
+          echo "$TOKEN" | $SSH "docker login \
+            harbor.hizero.local -u '$USR' \
+            --password-stdin"
+      - name: Diagnose /b/search gateway routing failure
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
+        run: |
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
+          echo "--- dangdang-frontend networks ---"
+          $SSH "docker inspect dangdang-frontend \
+            --format '{{json .NetworkSettings.Networks}}'" | tr ',' '\n'
+          echo "--- b-gateway container present + networks? ---"
+          $SSH "docker inspect b-gateway \
+            --format '{{json .NetworkSettings.Networks}}' 2>&1" | tr ',' '\n'
+          echo "--- dangdang-frontend BACKEND_GATEWAY_URL env ---"
+          $SSH "docker inspect dangdang-frontend \
+            --format '{{json .Config.Env}}'" | tr ',' '\n' | grep -i gateway
+          echo "--- b-gateway compose 관리 라벨(project/service) ---"
+          $SSH "docker inspect b-gateway --format \
+            '{{index .Config.Labels \"com.docker.compose.project\"}} / \
+            {{index .Config.Labels \"com.docker.compose.service\"}}' 2>&1"
+          echo "--- can frontend resolve/reach b-gateway by name? ---"
+          URL="http://b-gateway:8080/b/search?page=1"
+          $SSH "docker exec dangdang-frontend sh -c \
+            'wget -qO- $URL 2>&1 | head -c 300 || echo WGET_FAILED'"
+
+  # 2026-07-19, DB VM 선제 조치 일회성 job. DB VM은 harbor+monitoring VM과
+  # 별개 머신이라 production과 똑같이 harbor CA를 신뢰하도록 설정된 적이
+  # 없었다(진단으로 확인) - 윤경이 아직 하버에 push를 시도한 적이 없어서
+  # 지금까지 안 드러났을 뿐. production에서 겪은 것과 같은 문제를 미리
+  # 막기 위해 fix-harbor-dns와 동일한 두 가지(hosts, CA cert)를 여기도
+  # 적용한다. 결과 확인 후 이 job과 위 check_db_vm_harbor_trust 입력,
+  # DB_VM_SSH_PASSWORD(_ALT) 시크릿은 삭제한다.
+  check-db-vm-harbor-trust:
+    if: |
+      always() &&
+      github.event_name == 'workflow_dispatch' &&
+      inputs.check_db_vm_harbor_trust
+    runs-on: self-hosted
+    steps:
+      - name: Find working account/password combo
+        env:
+          PW1: ${{ secrets.DB_VM_SSH_PASSWORD }}
+          PW2: ${{ secrets.DB_VM_SSH_PASSWORD_ALT }}
+        run: |
+          FOUND=""
+          for USER in bruce zero; do
+            for PW in "$PW1" "$PW2"; do
+              export SSHPASS="$PW"
+              SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new"
+              SSH="$SSH -o ConnectTimeout=5 $USER@10.10.20.10"
+              if $SSH "echo ok" 2>/dev/null | grep -q ok; then
+                echo "Working combo: $USER @ 10.10.20.10"
+                FOUND="1"
+                echo "DB_USER=$USER" >> "$GITHUB_ENV"
+                if [ "$PW" = "$PW1" ]; then
+                  echo "DB_PW_SECRET=DB_VM_SSH_PASSWORD" >> "$GITHUB_ENV"
+                else
+                  echo "DB_PW_SECRET=DB_VM_SSH_PASSWORD_ALT" >> "$GITHUB_ENV"
+                fi
+                break 2
+              fi
+            done
+          done
+          if [ -z "$FOUND" ]; then
+            echo "No account/password combo worked against 10.10.20.10"
+            exit 1
+          fi
+      - name: Diagnose DNS + CA trust state on DB VM
+        env:
+          PW1: ${{ secrets.DB_VM_SSH_PASSWORD }}
+          PW2: ${{ secrets.DB_VM_SSH_PASSWORD_ALT }}
+        run: |
+          if [ "$DB_PW_SECRET" = "DB_VM_SSH_PASSWORD" ]; then
+            export SSHPASS="$PW1"
+          else
+            export SSHPASS="$PW2"
+          fi
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new"
+          SSH="$SSH $DB_USER@10.10.20.10"
+          echo "--- /etc/hosts (harbor entry?) ---"
+          $SSH "grep harbor /etc/hosts || echo '(no harbor entry)'"
+          echo "--- /etc/docker/certs.d/ ---"
+          $SSH "ls -la /etc/docker/certs.d/ 2>&1 || echo '(directory missing)'"
+          echo "--- docker installed? ---"
+          $SSH "docker --version 2>&1 || echo '(docker not found)'"
+          echo "--- clock skew check (JWT auth fails if clocks disagree) ---"
+          echo "runner (harbor VM) time: $(date -u)"
+          echo "DB VM time: $($SSH 'date -u')"
+          echo "--- attempt Harbor login (expected to fail if unconfigured) ---"
+          # 2026-07-19: 큰따옴표 대입("...") 이었을 때 robot 계정 이름의 '$'가
+          # bash 변수 참조로 오해석되어 문자열이 깨졌음(예: robot$ci-xxx ->
+          # robot-xxx). 작은따옴표로 바꿔 GH 시크릿 치환 결과를 그대로 보존.
+          TOKEN='${{ secrets.HARBOR_ROBOT_TOKEN }}'
+          USR='${{ secrets.HARBOR_ROBOT_USER }}'
+          echo "$TOKEN" | $SSH "docker login harbor.hizero.local -u '$USR' \
+            --password-stdin 2>&1" || true
+          # 2026-07-19: 여기 있던 curl -u 토큰 요청 재현은 제거함 - 실패 시
+          # robot 계정을 잠가서 이후 "Verify Harbor login now works on DB
+          # VM" 스텝을 자격증명과 무관하게 매번 실패시켰음(harbor-core
+          # debug 로그로 확인, production job과 동일한 원인).
+      - name: Copy Harbor CA cert to DB VM home dir
+        env:
+          PW1: ${{ secrets.DB_VM_SSH_PASSWORD }}
+          PW2: ${{ secrets.DB_VM_SSH_PASSWORD_ALT }}
+        run: |
+          if [ "$DB_PW_SECRET" = "DB_VM_SSH_PASSWORD" ]; then
+            export SSHPASS="$PW1"
+          else
+            export SSHPASS="$PW2"
+          fi
+          SCP="sshpass -e scp -o StrictHostKeyChecking=accept-new"
+          CA_LOCAL="/etc/docker/certs.d/harbor.hizero.local/ca.crt"
+          $SCP "$CA_LOCAL" "$DB_USER@10.10.20.10":~/harbor-ca.crt
+          echo "harbor VM의 CA 인증서를 DB VM ~/harbor-ca.crt 로 복사 완료"
+      - name: Patch DB VM hosts + CA trust (requires passwordless sudo)
+        id: patch-db
+        continue-on-error: true
+        env:
+          PW1: ${{ secrets.DB_VM_SSH_PASSWORD }}
+          PW2: ${{ secrets.DB_VM_SSH_PASSWORD_ALT }}
+        run: |
+          if [ "$DB_PW_SECRET" = "DB_VM_SSH_PASSWORD" ]; then
+            export SSHPASS="$PW1"
+          else
+            export SSHPASS="$PW2"
+          fi
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new"
+          SSH="$SSH $DB_USER@10.10.20.10"
+          CMD="sudo -n sed -i '/harbor\.hizero\.local/d' /etc/hosts"
+          CMD="$CMD && echo '192.168.0.53 harbor.hizero.local'"
+          CMD="$CMD | sudo -n tee -a /etc/hosts"
+          CMD="$CMD && sudo -n mkdir -p /etc/docker/certs.d/harbor.hizero.local"
+          CMD="$CMD && sudo -n cp ~/harbor-ca.crt"
+          CMD="$CMD /etc/docker/certs.d/harbor.hizero.local/ca.crt"
+          $SSH "$CMD"
+      - name: Manual fallback for DB VM if passwordless sudo unavailable
+        if: steps.patch-db.outcome == 'failure'
+        run: |
+          echo "sudo -n failed on DB VM (no NOPASSWD rule for $DB_USER)."
+          echo "DB VM(10.10.20.10)에 $DB_USER 계정으로 직접 접속해서"
+          echo "아래 두 줄을 실행해줘 (idempotent):"
+          echo "  echo '192.168.0.53 harbor.hizero.local' \\"
+          echo "    | sudo tee -a /etc/hosts"
+          echo "  sudo mkdir -p /etc/docker/certs.d/harbor.hizero.local \\"
+          echo "    && sudo cp ~/harbor-ca.crt \\"
+          echo "    /etc/docker/certs.d/harbor.hizero.local/ca.crt"
+      - name: Verify Harbor login now works on DB VM
+        env:
+          PW1: ${{ secrets.DB_VM_SSH_PASSWORD }}
+          PW2: ${{ secrets.DB_VM_SSH_PASSWORD_ALT }}
+        run: |
+          if [ "$DB_PW_SECRET" = "DB_VM_SSH_PASSWORD" ]; then
+            export SSHPASS="$PW1"
+          else
+            export SSHPASS="$PW2"
+          fi
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new"
+          SSH="$SSH $DB_USER@10.10.20.10"
+          $SSH "getent hosts harbor.hizero.local"
+          # 작은따옴표 대입 - '$' 포함된 robot 계정명이 bash 변수 참조로
+          # 오해석되지 않도록 함(production job과 동일 버그).
+          TOKEN='${{ secrets.HARBOR_ROBOT_TOKEN }}'
+          USR='${{ secrets.HARBOR_ROBOT_USER }}'
+          echo "$TOKEN" | $SSH "docker login harbor.hizero.local -u '$USR' \
+            --password-stdin"
+
+  # 2026-07-19, b-gateway production 배포 job. non-root/read-only 전환 검증차
+  # 처음 추가했지만(격리 환경에서 기동/resolver/temp 경로 생성 전부 검증 완료 후
+  # 실제 적용 - run 29675315141에서 라우트 전체 200, /b/admin Lua 분기까지
+  # 정상 확인), 이후 b-gateway를 재배포할 유일한 경로라 상시 job으로 유지한다
+  # (위 run_bgateway_cutover 입력 주석 참고). workflow_dispatch로 명시적으로
+  # 켜야만 실행되고, 나머지 이벤트(push, PR)에서는 절대 안 돈다 - production
+  # 유일한 진입점을 건드리는 job이라 자동 트리거는 사고 위험이 크다.
+  bgateway-cutover:
+    # 첫 실행(run 29675180327)에서 run_bgateway_cutover=true로 dispatch했는데도
+    # skipped됨 - backend-deploy-production 주석의 "always() 없으면 커스텀
+    # if:에 암묵적 success()가 붙는다"는 문제와 동일할 가능성이 높아 이
+    # job도 always()를 명시한다. needs: [backend-checks]도 이 job과
+    # 무관한 의존성이라 제거(불필요하게 skip 조건을 늘릴 수 있음).
+    if: |
+      always() &&
+      github.event_name == 'workflow_dispatch' &&
+      inputs.run_bgateway_cutover
+    runs-on: self-hosted
+    env:
+      PROD_HOST: bruce@10.10.10.30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Backup current b-gateway state
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
+        run: |
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
+          TS=$(date +%Y%m%d-%H%M%S)
+          echo "BACKUP_TS=$TS" >> "$GITHUB_ENV"
+          CMD="mkdir -p ~/b-gateway-backup-$TS"
+          CMD="$CMD && cp -r ~/b-gateway/* ~/b-gateway-backup-$TS/"
+          CMD="$CMD && docker inspect b-gateway"
+          CMD="$CMD > ~/b-gateway-backup-$TS/docker-inspect.json 2>&1 || true"
+          $SSH "$CMD"
+          echo "Backed up to ~/b-gateway-backup-$TS on production VM"
+      - name: Deploy new files (SCP)
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
+        run: |
+          SCP="sshpass -e scp -o StrictHostKeyChecking=accept-new"
+          $SCP infra/b-gateway/docker-compose.yml \
+            "$PROD_HOST":~/b-gateway/docker-compose.yml
+          $SCP infra/b-gateway/Dockerfile "$PROD_HOST":~/b-gateway/Dockerfile
+          $SCP infra/b-gateway/nginx.conf "$PROD_HOST":~/b-gateway/nginx.conf
+      - name: Build and recreate (SSH)
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
+        run: |
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
+          # 2026-07-19: docker-compose.yml이 있는 디렉터리명(b-gateway)이
+          # 기본 project 이름으로 쓰이는데, 지금 떠 있는 컨테이너는
+          # project=backend 라벨을 갖고 있음(원래 backend 스택 일부로 처음
+          # 배포됐던 흔적 - 재헌님 확인). project 이름이 안 맞으면 compose가
+          # 기존 컨테이너를 자기 관리 대상으로 인식 못 해서 이름 충돌 남
+          # (공식 문서: project 이름으로 리소스를 격리/추적). -p로 기존과
+          # 동일한 project 이름을 명시해서 정상적으로 recreate되게 함.
+          CMD="cd ~/b-gateway"
+          CMD="$CMD && docker compose -p backend build"
+          CMD="$CMD && docker compose -p backend up -d"
+          $SSH "$CMD"
+      - name: Route verification
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
+        run: |
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
+          sleep 5
+          FAIL=""
+          check() {
+            CHK="curl -s -o /dev/null -w '%{http_code}' $1"
+            CODE=$($SSH "$CHK" || echo "000")
+            echo "$1 -> $CODE"
+            case "$CODE" in
+              2*|3*) : ;;
+              *) FAIL="1" ;;
+            esac
+          }
+          check "http://localhost:8080/b/search?page=1"
+          check "http://localhost:8080/b/recipes"
+          check "http://localhost:8080/b/tags/category"
+          check "http://localhost:8080/b/home/rank/item"
+          $SSH "curl -s -X POST -H 'Content-Type: application/json' \
+            -d '{\"menu\":\"product\"}' \
+            -o /dev/null -w '/b/admin (product) -> %{http_code}\n' \
+            http://localhost:8080/b/admin"
+          $SSH "curl -s -X POST -H 'Content-Type: application/json' \
+            -d '{\"menu\":\"create-tag\"}' \
+            -o /dev/null -w '/b/admin (create-tag) -> %{http_code}\n' \
+            http://localhost:8080/b/admin"
+          $SSH "docker ps --filter name=b-gateway --format '{{.Status}}'"
+          if [ -n "$FAIL" ]; then
+            echo "One or more core routes failed"
+            exit 1
+          fi
+      - name: Rollback on failure
+        if: failure()
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
+        run: |
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
+          CMD="cd ~/b-gateway && docker compose -p backend down"
+          CMD="$CMD && cp ~/b-gateway-backup-$BACKUP_TS/* ~/b-gateway/"
+          CMD="$CMD && docker compose -p backend up -d"
+          $SSH "$CMD"
+          echo "Rolled back to pre-cutover state (backup: $BACKUP_TS)"
 
   # backend-build-test/backend-image-scanning은 서비스별 매트릭스라 체크 이름이
   # "backend-build-test (admin-service)"처럼 매번 달라져서, 브랜치 보호 규칙의
@@ -562,9 +1111,13 @@ jobs:
           SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
         run: |
           SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
-          $SSH "docker login harbor.hizero.local \
-            -u '${{ secrets.HARBOR_ROBOT_USER }}' \
-            -p '${{ secrets.HARBOR_ROBOT_TOKEN }}'"
+          # 작은따옴표 대입 - robot 계정명의 '$'가 bash 변수 참조로
+          # 오해석되어 문자열이 깨지는 걸 방지(하루 종일 재현됐던
+          # "Invalid credentials"의 실제 원인 - 네트워크/CA 문제 아님).
+          TOKEN='${{ secrets.HARBOR_ROBOT_TOKEN }}'
+          USR='${{ secrets.HARBOR_ROBOT_USER }}'
+          echo "$TOKEN" | $SSH "docker login harbor.hizero.local -u '$USR' \
+            --password-stdin"
       - name: Deploy via Docker Compose (SSH)
         env:
           SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
