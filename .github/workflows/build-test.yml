@@ -518,13 +518,17 @@ jobs:
           find /data -iname "*.conf" -o -iname "*.yml" 2>/dev/null | \
             xargs grep -l "allow \|deny \|ssl_client\|X-Real-IP" \
             2>/dev/null || echo "(none found)"
-          echo "--- token endpoint, direct curl WITH credentials from"
-          echo "    harbor VM (same target IP DB VM/production use) ---"
+          echo "--- exact WWW-Authenticate challenge (capture real params) ---"
+          CHALLENGE=$(curl -sk -i https://harbor.hizero.local/v2/ \
+            | grep -i "www-authenticate")
+          echo "$CHALLENGE"
+          echo "--- token request WITH account= param included ---"
           USR="${{ secrets.HARBOR_ROBOT_USER }}"
           TOK="${{ secrets.HARBOR_ROBOT_TOKEN }}"
           REALM="https://harbor.hizero.local/service/token"
           curl -sk -w '\nHTTP_CODE:%{http_code}\n' \
-            -u "$USR:$TOK" "$REALM?service=harbor-registry" | tail -3
+            -u "$USR:$TOK" \
+            "$REALM?service=harbor-registry&account=$USR" | tail -5
       - name: Check Harbor CA trust and existing pull capability
         env:
           SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
