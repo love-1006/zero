@@ -533,13 +533,14 @@ jobs:
           CHALLENGE=$(curl -sk -i https://harbor.hizero.local/v2/ \
             | grep -i "www-authenticate")
           echo "$CHALLENGE"
-          echo "--- token request WITH account= param included ---"
-          USR="${{ secrets.HARBOR_ROBOT_USER }}"
-          TOK="${{ secrets.HARBOR_ROBOT_TOKEN }}"
-          REALM="https://harbor.hizero.local/service/token"
-          curl -sk -w '\nHTTP_CODE:%{http_code}\n' \
-            -u "$USR:$TOK" \
-            "$REALM?service=harbor-registry&account=$USR" | tail -5
+          # 2026-07-19: 여기 있던 수동 curl -u 토큰 요청 재현 테스트는 제거함.
+          # harbor-core debug 로그로 확인한 결과, 이 curl 재현이 실패하면서
+          # robot 계정을 잠갔고(Harbor 실패 로그인 잠금 정책), 같은 job의
+          # 뒤쪽 "Verify Harbor login now works" 스텝(진짜 production
+          # docker login)이 자격증명과 무관하게 이미 잠긴 계정이라 매번
+          # 실패했던 것 - 하루 종일 재현됐던 "Invalid credentials"의
+          # 실제 원인이었음. 이 curl 재현은 애초에 실제 docker login과
+          # 다른 방식(수동 조립)이라 신뢰도도 낮았으므로 완전히 제거.
       - name: Check for zero-user migration side effects
         env:
           SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
@@ -749,11 +750,10 @@ jobs:
           USR="${{ secrets.HARBOR_ROBOT_USER }}"
           echo "$TOKEN" | $SSH "docker login harbor.hizero.local -u '$USR' \
             --password-stdin 2>&1" || true
-          echo "--- direct curl of the token endpoint from DB VM ---"
-          REALM="https://harbor.hizero.local/service/token"
-          SVC="service=harbor-registry"
-          $SSH "curl -sk -w '\nHTTP_CODE:%{http_code}\n' \
-            -u '$USR:$TOKEN' '$REALM?$SVC'"
+          # 2026-07-19: 여기 있던 curl -u 토큰 요청 재현은 제거함 - 실패 시
+          # robot 계정을 잠가서 이후 "Verify Harbor login now works on DB
+          # VM" 스텝을 자격증명과 무관하게 매번 실패시켰음(harbor-core
+          # debug 로그로 확인, production job과 동일한 원인).
       - name: Copy Harbor CA cert to DB VM home dir
         env:
           PW1: ${{ secrets.DB_VM_SSH_PASSWORD }}
