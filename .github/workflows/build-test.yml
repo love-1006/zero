@@ -702,6 +702,10 @@ jobs:
           echo "--- dangdang-frontend BACKEND_GATEWAY_URL env ---"
           $SSH "docker inspect dangdang-frontend \
             --format '{{json .Config.Env}}'" | tr ',' '\n' | grep -i gateway
+          echo "--- b-gateway compose 관리 라벨(project/service) ---"
+          $SSH "docker inspect b-gateway --format \
+            '{{index .Config.Labels \"com.docker.compose.project\"}} / \
+            {{index .Config.Labels \"com.docker.compose.service\"}}' 2>&1"
           echo "--- can frontend resolve/reach b-gateway by name? ---"
           URL="http://b-gateway:8080/b/search?page=1"
           $SSH "docker exec dangdang-frontend sh -c \
