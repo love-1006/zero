@@ -461,8 +461,15 @@ jobs:
   # 나머지 이벤트(push, PR)에서는 절대 안 돈다 - production b-gateway를 건드리는
   # job이라 자동 트리거는 사고 위험이 크다.
   bgateway-cutover:
-    if: github.event_name == 'workflow_dispatch' && inputs.run_bgateway_cutover
-    needs: [backend-checks]
+    # 첫 실행(run 29675180327)에서 run_bgateway_cutover=true로 dispatch했는데도
+    # skipped됨 - backend-deploy-production 주석의 "always() 없으면 커스텀
+    # if:에 암묵적 success()가 붙는다"는 문제와 동일할 가능성이 높아 이
+    # job도 always()를 명시한다. needs: [backend-checks]도 이 job과
+    # 무관한 의존성이라 제거(불필요하게 skip 조건을 늘릴 수 있음).
+    if: |
+      always() &&
+      github.event_name == 'workflow_dispatch' &&
+      inputs.run_bgateway_cutover
     runs-on: self-hosted
     env:
       PROD_HOST: bruce@10.10.10.30
