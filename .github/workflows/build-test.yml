@@ -512,12 +512,25 @@ jobs:
           echo "--- host firewall (ufw/iptables) on harbor VM ---"
           sudo -n ufw status verbose 2>&1 || echo "(needs sudo, skipped)"
           sudo -n iptables -L -n 2>&1 || echo "(needs sudo, skipped)"
-          echo "--- nginx allow/deny directives under /data ---"
-          find /data -iname "*.conf" 2>/dev/null | xargs -I{} \
-            grep -l "allow \|deny " {} 2>/dev/null || \
-            echo "(none found)"
+          echo "--- harbor VM's own /etc/hosts (self-referencing entry?) ---"
+          grep harbor /etc/hosts || echo "(no harbor entry in own hosts)"
+          echo "--- nginx allow/deny or client-cert directives under /data ---"
+          find /data -iname "*.conf" -o -iname "*.yml" 2>/dev/null | \
+            xargs grep -l "allow \|deny \|ssl_client\|X-Real-IP" \
+            2>/dev/null || echo "(none found)"
+          echo "--- harbor.yml itself (proxy/hostname config) ---"
+          cat /data/harbor.yml 2>/dev/null || find / -maxdepth 3 \
+            -iname "harbor.yml" 2>/dev/null
           echo "--- raw /v2/ auth challenge from harbor VM itself ---"
           curl -sk -i https://harbor.hizero.local/v2/ 2>&1 | head -20
+          echo "--- token endpoint, forcing --resolve to 192.168.0.53 (same"
+          echo "    path DB VM/production use, with credentials) ---"
+          USR="${{ secrets.HARBOR_ROBOT_USER }}"
+          TOK="${{ secrets.HARBOR_ROBOT_TOKEN }}"
+          REALM="https://harbor.hizero.local/service/token"
+          curl -sk -w '\nHTTP_CODE:%{http_code}\n' \
+            --resolve harbor.hizero.local:443:192.168.0.53 \
+            -u "$USR:$TOK" "$REALM?service=harbor-registry" | tail -3
       - name: Check Harbor CA trust and existing pull capability
         env:
           SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
