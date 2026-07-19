@@ -501,6 +501,28 @@ jobs:
           HOST="harbor.hizero.local"
           OPENSSL="openssl s_client -connect $HOST:443 -servername $HOST"
           $SSH "$OPENSSL </dev/null 2>&1 | grep -E 'verify|issuer|subject'"
+      # 원인 확인(SESSION_HANDOFF_harbor_push.md, ZeroCheck_인수인계 문서): Harbor
+      # 인증서는 자체 CA("HiZero Root CA")로 서명됐고, harbor VM(이 self-hosted
+      # 러너가 도는 바로 그 VM)에는 처음부터 이미 CA 신뢰가 설정돼 있어서
+      # (/etc/docker/certs.d/harbor.hizero.local/ca.crt) image-scanning의
+      # push가 지금까지 문제없이 됐던 것. production VM은 완전히 다른 머신이라
+      # 이 CA 신뢰가 한 번도 설정된 적이 없었다 - 지금까지 backend가 되던 건
+      # 이미 캐시된 이미지라 새로 pull이 필요 없었을 뿐, 잠재적으로 같은
+      # 문제를 안고 있었다. harbor VM 로컬 CA 인증서를 production 홈 디렉터리로
+      # 옮기는 것까지는 자동화하고, 마지막 /etc/docker/certs.d/ 배치만
+      # sudo가 필요해 사람이 해야 한다.
+      - name: Copy Harbor CA cert to production home dir
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
+        run: |
+          SCP="sshpass -e scp -o StrictHostKeyChecking=accept-new"
+          CA_LOCAL="/etc/docker/certs.d/harbor.hizero.local/ca.crt"
+          if [ ! -f "$CA_LOCAL" ]; then
+            echo "harbor VM 로컬에 $CA_LOCAL 이 없음 - 경로 재확인 필요"
+            exit 1
+          fi
+          $SCP "$CA_LOCAL" "$PROD_HOST":~/harbor-ca.crt
+          echo "harbor VM의 CA 인증서를 production ~/harbor-ca.crt 로 복사 완료"
       - name: Check for any existing NOPASSWD sudo rule
         env:
           SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
@@ -548,14 +570,27 @@ jobs:
           CMD="$CMD && echo '$WORKING_IP harbor.hizero.local' | sudo -n tee -a"
           CMD="$CMD /etc/hosts"
           $SSH "$CMD"
+      - name: Patch CA trust (requires passwordless sudo)
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
+        run: |
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
+          CMD="sudo -n mkdir -p /etc/docker/certs.d/harbor.hizero.local"
+          CMD="$CMD && sudo -n cp ~/harbor-ca.crt"
+          CMD="$CMD /etc/docker/certs.d/harbor.hizero.local/ca.crt"
+          $SSH "$CMD"
       - name: Manual fallback if passwordless sudo unavailable
         if: failure()
         run: |
           echo "sudo -n failed (no NOPASSWD rule for this account)."
           echo "production VM(10.10.10.30)에 bruce 또는 zero 계정으로 직접"
-          echo "접속해서 아래 한 줄을 실행해줘:"
+          echo "접속해서 아래 두 줄을 실행해줘 (필요없는 건 이미 반영돼있으면"
+          echo "그냥 통과함 - idempotent):"
           echo "  echo '$WORKING_IP harbor.hizero.local' \\"
           echo "    | sudo tee -a /etc/hosts"
+          echo "  sudo mkdir -p /etc/docker/certs.d/harbor.hizero.local \\"
+          echo "    && sudo cp ~/harbor-ca.crt \\"
+          echo "    /etc/docker/certs.d/harbor.hizero.local/ca.crt"
       - name: Verify Harbor login now works
         env:
           SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
