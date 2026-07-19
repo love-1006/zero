@@ -901,9 +901,16 @@ jobs:
           SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
         run: |
           SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
+          # 2026-07-19: docker-compose.yml이 있는 디렉터리명(b-gateway)이
+          # 기본 project 이름으로 쓰이는데, 지금 떠 있는 컨테이너는
+          # project=backend 라벨을 갖고 있음(원래 backend 스택 일부로 처음
+          # 배포됐던 흔적 - 재헌님 확인). project 이름이 안 맞으면 compose가
+          # 기존 컨테이너를 자기 관리 대상으로 인식 못 해서 이름 충돌 남
+          # (공식 문서: project 이름으로 리소스를 격리/추적). -p로 기존과
+          # 동일한 project 이름을 명시해서 정상적으로 recreate되게 함.
           CMD="cd ~/b-gateway"
-          CMD="$CMD && docker compose build"
-          CMD="$CMD && docker compose up -d"
+          CMD="$CMD && docker compose -p backend build"
+          CMD="$CMD && docker compose -p backend up -d"
           $SSH "$CMD"
       - name: Route verification
         env:
@@ -944,9 +951,9 @@ jobs:
           SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
         run: |
           SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
-          CMD="cd ~/b-gateway && docker compose down"
+          CMD="cd ~/b-gateway && docker compose -p backend down"
           CMD="$CMD && cp ~/b-gateway-backup-$BACKUP_TS/* ~/b-gateway/"
-          CMD="$CMD && docker compose up -d"
+          CMD="$CMD && docker compose -p backend up -d"
           $SSH "$CMD"
           echo "Rolled back to pre-cutover state (backup: $BACKUP_TS)"
 
