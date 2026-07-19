@@ -487,6 +487,17 @@ jobs:
     env:
       PROD_HOST: bruce@10.10.10.30
     steps:
+      - name: Check for any existing NOPASSWD sudo rule
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
+        run: |
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
+          echo "--- sudo -n -l (no prompt; empty/denied = no NOPASSWD rule) ---"
+          $SSH "sudo -n -l" || true
+          echo "--- /etc/hosts current permissions ---"
+          $SSH "ls -la /etc/hosts"
+          echo "--- groups for current user ---"
+          $SSH "id"
       - name: Diagnose reachable Harbor IP
         env:
           SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
