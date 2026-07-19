@@ -775,6 +775,23 @@ jobs:
           URL="http://b-gateway:8080/b/search?page=1"
           $SSH "docker exec dangdang-frontend sh -c \
             'wget -qO- $URL 2>&1 | head -c 300 || echo WGET_FAILED'"
+      - name: Deploy cAdvisor on production VM
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
+        run: |
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
+          SCP="sshpass -e scp -o StrictHostKeyChecking=accept-new"
+          echo "--- docker without sudo? ---"
+          $SSH "docker ps >/dev/null 2>&1 && echo OK || echo NEEDS_SUDO"
+          echo "--- port 8080 free? ---"
+          $SSH "ss -tln 2>/dev/null | grep ':8080' || echo free"
+          $SSH "mkdir -p ~/cadvisor"
+          $SCP infra/cadvisor/docker-compose.yml \
+            "$PROD_HOST":~/cadvisor/docker-compose.yml
+          $SSH "cd ~/cadvisor && docker compose up -d"
+          sleep 5
+          $SSH "docker ps --filter name=cadvisor \
+            --format '{{.Names}}\t{{.Status}}'"
 
   # 2026-07-19, DB VM 선제 조치 일회성 job. DB VM은 harbor+monitoring VM과
   # 별개 머신이라 production과 똑같이 harbor CA를 신뢰하도록 설정된 적이
@@ -916,6 +933,36 @@ jobs:
           USR='${{ secrets.HARBOR_ROBOT_USER }}'
           echo "$TOKEN" | $SSH "docker login harbor.hizero.local -u '$USR' \
             --password-stdin"
+      - name: Deploy cAdvisor on DB VM
+        env:
+          PW1: ${{ secrets.DB_VM_SSH_PASSWORD }}
+          PW2: ${{ secrets.DB_VM_SSH_PASSWORD_ALT }}
+        run: |
+          if [ "$DB_PW_SECRET" = "DB_VM_SSH_PASSWORD" ]; then
+            export SSHPASS="$PW1"
+          else
+            export SSHPASS="$PW2"
+          fi
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new"
+          SSH="$SSH $DB_USER@10.10.20.10"
+          SCP="sshpass -e scp -o StrictHostKeyChecking=accept-new"
+          echo "--- docker without sudo? ---"
+          $SSH "docker ps >/dev/null 2>&1 && echo OK || echo NEEDS_SUDO"
+          $SSH "mkdir -p ~/cadvisor"
+          $SCP infra/cadvisor/docker-compose.yml \
+            "$DB_USER@10.10.20.10":~/cadvisor/docker-compose.yml
+          if $SSH "docker ps" >/dev/null 2>&1; then
+            $SSH "cd ~/cadvisor && docker compose up -d"
+          else
+            $SSH "cd ~/cadvisor && sudo -n docker compose up -d" || \
+              echo "sudo -n 실패 - DB VM에 직접 접속해서 " \
+                "'cd ~/cadvisor && sudo docker compose up -d' 실행 필요"
+          fi
+          sleep 5
+          $SSH "docker ps --filter name=cadvisor \
+            --format '{{.Names}}\t{{.Status}}' 2>&1 || \
+            sudo -n docker ps --filter name=cadvisor \
+            --format '{{.Names}}\t{{.Status}}'"
 
   # 2026-07-19, b-gateway production 배포 job. non-root/read-only 전환 검증차
   # 처음 추가했지만(격리 환경에서 기동/resolver/temp 경로 생성 전부 검증 완료 후
