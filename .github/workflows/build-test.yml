@@ -505,8 +505,13 @@ jobs:
           SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
         run: |
           SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
-          echo "--- /etc/docker/certs.d/ ---"
-          $SSH "ls -la /etc/docker/certs.d/ 2>&1 || echo '(directory missing)'"
+          echo "--- /etc/docker/certs.d/harbor.hizero.local/ contents ---"
+          CERT_DIR="/etc/docker/certs.d/harbor.hizero.local/"
+          $SSH "ls -la $CERT_DIR 2>&1 || echo '(directory missing)'"
+          echo "--- ca.crt content check (subject/issuer if present) ---"
+          CERT_PATH="/etc/docker/certs.d/harbor.hizero.local/ca.crt"
+          $SSH "test -f $CERT_PATH && openssl x509 -in $CERT_PATH -noout \
+            -subject -issuer || echo '(ca.crt missing or unreadable)'"
           echo "--- can production already pull a known backend image? ---"
           IMG="harbor.hizero.local/dangdang-backend/login-service:latest"
           $SSH "docker pull $IMG 2>&1 | tail -5"
