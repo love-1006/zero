@@ -50,6 +50,19 @@ on:
         required: false
         default: false
         type: boolean
+      fix_harbor_dns:
+        # 2026-07-18 frontend-deploy-production 실패 원인: production
+        # VM(10.10.10.30)에서 "lookup harbor.hizero.local ... server
+        # misbehaving" - production VM의 DNS 리졸버가 harbor.hizero.local을
+        # 못 찾는다(backend는 이미 pull된 이미지가 로컬에 있어서 이 문제를 안
+        # 겪었을 뿐, 근본 원인은 동일하게 잠재해 있었을 가능성). 2026-07-19,
+        # 지훈 지시로 정식 DNS 대신 harbor VM의 내부 IP를 production VM의
+        # /etc/hosts에 고정 등록해 우회 - 서비스가 뜨는 게 우선이라는 판단
+        # (정식 DNS 인프라는 팀 도메인 확정 이후 별도로 정리).
+        description: 'production VM에 harbor.hizero.local -> 내부IP /etc/hosts 등록'
+        required: false
+        default: false
+        type: boolean
 
 # 같은 브랜치에 연달아 push되면 deploy job이 harbor VM에 동시에 두 번 돌 수 있어서
 # (docker compose up이 겹치는 배포 사고로 이어질 수 있음), main push에서는 순차 실행을
@@ -458,6 +471,75 @@ jobs:
         run: |
           SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
           $SSH "echo $TAG > ~/backend/.last-deployed-tag"
+
+  # 2026-07-19, 일회성 진단+수정 job(fix_harbor_dns 입력으로만 실행). 검증 끝나면
+  # 이 job과 위 fix_harbor_dns 입력은 삭제한다(prod-env-fix와 동일 패턴) -
+  # /etc/hosts 등록은 한 번만 하면 재부팅 전까지 유지되는 영구 조치라 매번 돌 필요
+  # 없음. harbor VM 내부 IP(192.168.0.53, LAN) 또는 Tailscale IP(100.96.79.73)
+  # 중 production VM(10.10.10.30, 새 App 계층)에서 실제로 닿는 쪽을 찾아
+  # /etc/hosts에 고정한다 - 정식 DNS 대신 쓰는 임시 우회.
+  fix-harbor-dns:
+    if: |
+      always() &&
+      github.event_name == 'workflow_dispatch' &&
+      inputs.fix_harbor_dns
+    runs-on: self-hosted
+    env:
+      PROD_HOST: bruce@10.10.10.30
+    steps:
+      - name: Diagnose reachable Harbor IP
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
+        run: |
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
+          echo "--- current /etc/hosts ---"
+          $SSH "cat /etc/hosts"
+          echo "--- connectivity checks ---"
+          for IP in 192.168.0.53 100.96.79.73; do
+            CHK="curl -sk -m 3 -o /dev/null -w '%{http_code}' https://$IP/v2/"
+            if $SSH "$CHK" | grep -qE '^[234]'; then
+              echo "$IP -> reachable (Harbor API responded)"
+              WORKING_IP="$IP"
+              break
+            else
+              echo "$IP -> unreachable"
+            fi
+          done
+          if [ -z "$WORKING_IP" ]; then
+            echo "No candidate IP reached Harbor API - check manually"
+            exit 1
+          fi
+          echo "WORKING_IP=$WORKING_IP" >> "$GITHUB_ENV"
+      # sudo에 비밀번호를 파이프하는 방식은 안 쓴다(passwordless sudo가 아니면
+      # 이 스텝은 권한 오류로 실패한다 - 그럴 경우 지훈이 직접 콘솔에서
+      # 한 줄만 추가하면 됨: echo "<IP> harbor.hizero.local" | sudo tee -a
+      # /etc/hosts). bruce 계정에 NOPASSWD sudo가 이미 설정돼 있다는 전제.
+      - name: Patch /etc/hosts (requires passwordless sudo)
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
+        run: |
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
+          CMD="sudo -n sed -i '/harbor\.hizero\.local/d' /etc/hosts"
+          CMD="$CMD && echo '$WORKING_IP harbor.hizero.local' | sudo -n tee -a"
+          CMD="$CMD /etc/hosts"
+          $SSH "$CMD"
+      - name: Manual fallback if passwordless sudo unavailable
+        if: failure()
+        run: |
+          echo "sudo -n failed (no NOPASSWD rule for this account)."
+          echo "production VM(10.10.10.30)에 bruce 또는 zero 계정으로 직접"
+          echo "접속해서 아래 한 줄을 실행해줘:"
+          echo "  echo '$WORKING_IP harbor.hizero.local' \\"
+          echo "    | sudo tee -a /etc/hosts"
+      - name: Verify Harbor login now works
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
+        run: |
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
+          $SSH "getent hosts harbor.hizero.local"
+          $SSH "docker login harbor.hizero.local \
+            -u '${{ secrets.HARBOR_ROBOT_USER }}' \
+            -p '${{ secrets.HARBOR_ROBOT_TOKEN }}'"
 
   # 2026-07-19, b-gateway production 배포 job. non-root/read-only 전환 검증차
   # 처음 추가했지만(격리 환경에서 기동/resolver/temp 경로 생성 전부 검증 완료 후
