@@ -11,9 +11,13 @@ on:
   workflow_dispatch:
     inputs:
       backend_tag:
-        description: '백엔드 배포 태그 (비우면 latest)'
+        # 2026-07-19, well-architected 체크리스트 "latest 배포 금지" 준수 -
+        # frontend_tag와 동일하게 기본값을 latest가 아니라 빈 값으로 두고,
+        # 비우면 job 내부에서 현재 커밋 sha로 폴백한다(불변 태그 강제).
+        # 수동 롤백/특정 버전 재배포는 명시적으로 태그를 넣어서 한다.
+        description: '백엔드 배포 태그 (비우면 현재 커밋 sha)'
         required: false
-        default: 'latest'
+        default: ''
       frontend_tag:
         # frontend compose는 불변 태그를 요구해서(immutable tag) latest를 기본으로
         # 안 두고, 비우면 이번 워크플로 실행의 커밋 sha를 쓴다(job 내부에서 처리).
