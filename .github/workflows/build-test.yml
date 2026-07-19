@@ -678,8 +678,15 @@ jobs:
         run: |
           SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
           $SSH "getent hosts harbor.hizero.local"
-          echo "${{ secrets.HARBOR_ROBOT_TOKEN }}" | $SSH "docker login \
-            harbor.hizero.local -u '${{ secrets.HARBOR_ROBOT_USER }}' \
+          # 2026-07-19: GH 시크릿 표현식을 바깥쪽 큰따옴표 문자열 안에 직접
+          # 인라인하면, 그 안의 작은따옴표는 bash 문법상 아무 의미가 없어서
+          # (이미 큰따옴표 안이라 quoting 역할을 못 함) robot 계정명의 '$'가
+          # 로컬 bash에 의해 변수로 오해석/삭제됨. 반드시 별도 작은따옴표
+          # 대입으로 먼저 변수에 담은 뒤 그 변수를 참조해야 안전함.
+          TOKEN='${{ secrets.HARBOR_ROBOT_TOKEN }}'
+          USR='${{ secrets.HARBOR_ROBOT_USER }}'
+          echo "$TOKEN" | $SSH "docker login \
+            harbor.hizero.local -u '$USR' \
             --password-stdin"
 
   # 2026-07-19, DB VM 선제 조치 일회성 job. DB VM은 harbor+monitoring VM과
