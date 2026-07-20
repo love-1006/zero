@@ -160,6 +160,34 @@ jobs:
             main-service: 'backend/main-service/**'
             product-service: 'backend/product-service/**'
             recipe-service: 'backend/recipe-service/**'
+      # 2026-07-20, 위 allowlist의 구조적 한계(새 서비스 추가 시 안 고치면 조용히
+      # skip) 자체를 없애지는 못하지만(dorny/paths-filter는 디렉터리 자동탐지를
+      # 지원 안 함 - 공식 문서 확인), 최소한 "조용한 스킵"을 "시끄러운 실패"로
+      # 바꾼다. backend/services는 실제 서비스가 아니라 문서(.md) 폴더라 예외.
+      # 새 backend/<name> 디렉터리가 생기면 이 job이 즉시 실패하면서 어디를
+      # 고쳐야 하는지 알려준다 - PR #52처럼 아무도 못 알아채고 넘어가는 걸 방지.
+      - name: Fail loudly if a backend/ dir is missing from known services
+        if: steps.check.outputs.exists == 'true'
+        run: |
+          KNOWN="admin-service ai community-service diet-service
+                 ingredients-service login-service main-service
+                 product-service recipe-service"
+          for dir in backend/*/; do
+            name="$(basename "$dir")"
+            [ "$name" = "services" ] && continue
+            match=0
+            for k in $KNOWN; do
+              [ "$k" = "$name" ] && match=1 && break
+            done
+            if [ "$match" = "0" ]; then
+              echo "::error::backend/$name exists but isn't in" \
+                "detect-backend's paths-filter or" \
+                "backend-deploy-production's SERVICES list/PORTS map." \
+                "Add it to all three before this service can" \
+                "build/scan/deploy."
+              exit 1
+            fi
+          done
 
   # detect-backend와 같은 이유로 별도 job - frontend/ 존재 여부와 변경 여부를 체크아웃 후
   # 확인해서 넘긴다(2026-07-17 성애님 frontend/ 브랜치 인수 - sungA/front/main).
