@@ -69,7 +69,7 @@ services:
   # 2026-07-20, PR #52(MN-0111)로 추가된 AI 챗봇 서비스. 필요 env는
   # backend/ai/.env.example 참고(JWT_SECRET/BEDROCK_*/POSTGRES_* 등) -
   # 다른 서비스와 동일하게 통합 .env 하나를 공유해서 읽는다.
- ai:
+  ai:
     image: 192.168.0.53/dangdang-backend/ai:${TAG:-latest}
     container_name: ai
     env_file: ./.env
