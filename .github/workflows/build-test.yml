@@ -886,6 +886,27 @@ jobs:
           $SSH "timeout 5 bash -c \
             'cat < /dev/null > /dev/tcp/192.168.0.51/4317' \
             2>&1 && echo REACHABLE || echo UNREACHABLE"
+      # 2026-07-20, 일회성 청소 - production에 정체불명으로 떠 있다가 이미
+      # docker stop된 orphan loki 컨테이너/볼륨 제거. docker rm은 -f 없이
+      # 정지된 컨테이너에만 동작하므로(실행 중이면 그냥 에러) 리스크 0.
+      # 검증 끝나면 이 스텝은 삭제한다.
+      - name: One-off cleanup - remove stopped orphan loki container
+        env:
+          SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
+        run: |
+          SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
+          echo "--- 제거 전 상태 ---"
+          $SSH "docker ps -a --filter name=loki \
+            --format '{{.Names}}\t{{.Status}}'"
+          echo "--- 컨테이너 제거(정지 상태일 때만 동작) ---"
+          $SSH "docker rm loki" || echo "(이미 없거나 실행 중 - 안전하게 스킵)"
+          echo "--- 미사용 loki 볼륨 제거 ---"
+          $SSH "docker volume ls --filter name=loki --format '{{.Name}}'"
+          $SSH "docker volume rm monitoring_loki_data" \
+            2>&1 || echo "(볼륨 없거나 여전히 사용 중 - 안전하게 스킵)"
+          echo "--- 제거 후 상태 ---"
+          $SSH "docker ps -a --filter name=loki \
+            --format '{{.Names}}\t{{.Status}}'"
 
   # 2026-07-19, DB VM 선제 조치 일회성 job. DB VM은 harbor+monitoring VM과
   # 별개 머신이라 production과 똑같이 harbor CA를 신뢰하도록 설정된 적이
