@@ -73,6 +73,8 @@ services:
     image: 192.168.0.53/dangdang-backend/ai:${TAG:-latest}
     container_name: ai
     env_file: ./.env
+    volumes:
+      - ${HOME}/.aws:/home/appuser/.aws:ro   # Bedrock 자격증명(non-root 유저 appuser의 홈)
     ports:
       - "8022:8022"
     <<: *hardening
