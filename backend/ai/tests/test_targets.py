@@ -40,3 +40,20 @@ def test_unknown_activity_returns_none():
     # 매핑에 없는 활동량 문구는 계산하지 않는다(잘못된 계수 방지).
     assert calculate_targets(gender="남성", age=27, height_cm=180, weight_kg=70,
                              activity_level="알 수 없는 값") is None
+
+
+def test_english_gender_code_male_same_as_korean():
+    # DB는 성별을 영문 코드(MALE/FEMALE)로 저장한다 — 한글과 동일하게 인식해야 함.
+    kr = calculate_targets(gender="남성", age=27, height_cm=180, weight_kg=70,
+                           activity_level="주로 앉아서 생활해요")
+    en = calculate_targets(gender="MALE", age=27, height_cm=180, weight_kg=70,
+                           activity_level="주로 앉아서 생활해요")
+    assert en == kr == (2090, 52)
+
+
+def test_english_gender_code_female():
+    en = calculate_targets(gender="FEMALE", age=25, height_cm=165, weight_kg=55,
+                           activity_level="가벼운 운동을 주 1~3회 해요")
+    kr = calculate_targets(gender="여성", age=25, height_cm=165, weight_kg=55,
+                           activity_level="가벼운 운동을 주 1~3회 해요")
+    assert en == kr

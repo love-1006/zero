@@ -30,10 +30,11 @@ def calculate_targets(
     if gender is None or age is None or height_cm is None or weight_kg is None or factor is None:
         return None
 
-    # Harris-Benedict BMR (프론트 calculateBmr와 동일)
-    if gender == "남성":
+    # Harris-Benedict BMR (프론트 calculateBmr와 동일).
+    # 성별은 DB 저장값(영문코드 MALE/FEMALE)과 프론트 표기(남성/여성)를 모두 인식한다.
+    if gender in ("남성", "MALE"):
         bmr = 88.362 + 13.397 * weight_kg + 4.799 * height_cm - 5.677 * age
-    else:  # 여성 및 기타
+    else:  # 여성(FEMALE) 및 기타
         bmr = 447.593 + 9.247 * weight_kg + 3.098 * height_cm - 4.33 * age
 
     maintenance = _round_to_ten(_round_to_ten(bmr) * factor)
