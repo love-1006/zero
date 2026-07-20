@@ -1,0 +1,51 @@
+# 2026-07-20, 실무기준 점검 갭 #5 "단일 장애점" 완화 - "감시자를 감시".
+# 전체 관측 스택(Prometheus/Grafana/Loki/Tempo)이 monitoring VM 한 대에
+# 있어서, 그 VM이 죽으면 알람 발송 주체(Grafana)도 같이 죽어 아무도 모르게
+# 된다. 이 워크플로우는 monitoring VM "밖"(harbor VM self-hosted 러너)에서
+# 15분마다 핵심 엔드포인트를 직접 찔러보고, 실패 시 Grafana를 거치지 않고
+# 기존 Slack webhook으로 직통 통보한다. 완전한 해소(스택 이중화)는 VM 추가가
+# 필요한 팀 결정 사항 - 이건 그 전까지의 최소 안전망.
+name: Monitoring Watchdog
+
+on:
+  schedule:
+    # 15분 주기(UTC). GitHub 공식 문서상 스케줄은 정확 보장이 아니라
+    # 최선 노력(지연 가능) - 워치독 용도로는 충분.
+    - cron: '*/15 * * * *'
+  workflow_dispatch: {}
+
+jobs:
+  watchdog:
+    runs-on: self-hosted
+    steps:
+      - name: Probe monitoring stack from outside
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          # monitoring VM Tailscale IP - harbor VM에서 상시 도달 가능(실측).
+          M=100.110.81.51
+          FAILED=""
+          probe() {
+            name="$1"; url="$2"
+            code=$(curl -s -o /dev/null -w '%{http_code}' \
+              --max-time 10 "$url" || echo 000)
+            echo "$name -> $code"
+            case "$code" in
+              2*|3*) : ;;
+              *) FAILED="$FAILED $name($code)" ;;
+            esac
+          }
+          probe grafana    "http://$M:3000/api/health"
+          probe prometheus "http://$M:9090/-/healthy"
+          probe loki       "http://$M:3100/ready"
+          probe tempo      "http://$M:3200/ready"
+          if [ -n "$FAILED" ]; then
+            echo "WATCHDOG FAILURE:$FAILED"
+            TEXT=":rotating_light: [워치독] monitoring VM 관측 스택 응답 없음:"
+            TEXT="$TEXT$FAILED - Grafana 알람 자체가 못 나가는 상태일 수"
+            TEXT="$TEXT 있습니다. VM/컨테이너 확인 필요 (ssh bruce@$M)"
+            curl -s -X POST -H 'Content-Type: application/json' \
+              -d "{\"text\": \"$TEXT\"}" "$SLACK_WEBHOOK_URL" || true
+            exit 1
+          fi
+          echo "all healthy"
