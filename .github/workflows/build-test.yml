@@ -1,7 +1,17 @@
 name: Build & Test
 
 on:
+  # 2026-07-20, push 트리거를 main으로 한정. 그 전엔 전 브랜치 push라서 PR이
+  # 열린 브랜치는 같은 코드가 push+pull_request로 "이중 실행"됐다 - (1) 실패
+  # 알람이 항상 2배로 오고, (2) 같은 Sonar 프로젝트 키(브랜치명 기반)에 거의
+  # 동시에 분석 2건이 들어가 Quality Gate 체크가 CE 태스크 조회 404로 죽는
+  # 레이스가 하루 5회 재현됐다(전부 PR 열린 브랜치에서만 발생 - 실측). 배포는
+  # 어차피 main push 빌드 이미지만 쓰므로(브랜치 빌드 산출물은 배포 경로에
+  # 안 쓰임) 브랜치 검증은 pull_request 실행이 전담해도 손실이 없다. PR 없는
+  # 브랜치 push엔 CI가 안 도는 게 유일한 트레이드오프 - PR을 여는 게 팀 표준
+  # 플로우이므로 수용(윤경님 사례처럼 "push=배포" 오해도 함께 줄어듦).
   push:
+    branches: [main]
   pull_request:
     branches: [main]
   # production VM(재헌님이 이미 구축, 10.10.10.30)에 올리는 실제 배포는 main push 시
