@@ -1,7 +1,10 @@
 name: Lint
 
 on:
+  # 2026-07-20, build-test.yml과 동일한 이유로 push를 main 한정 - PR 열린
+  # 브랜치의 이중 실행(push+pull_request) 제거로 알람/러너 부하 절반.
   push:
+    branches: [main]
   pull_request:
     branches: [main]
 
