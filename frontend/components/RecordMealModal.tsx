@@ -482,14 +482,24 @@ export function RecordMealModal({
         <RecordDateNavigator value={recordDate} onChange={(date) => { setRecordDate(date); setSelected(null); }} min={minDate} max={maxDate} />
 
         {draftItems ? (
-          <div className="vision-draft">
-            <p className="eyebrow">사진 인식 확신이 낮아요</p>
-            <h3>인식된 음식을 확인하고 필요하면 지워주세요</h3>
-            {draftConfidence != null && <small>인식 확신도 {Math.round(draftConfidence * 100)}%</small>}
-            {confirmState === "error" && <p className="vision-file-error" role="alert">확정하지 못했어요. 다시 시도해 주세요.</p>}
-            {draftItems.length === 0 ? (
-              <p className="entry-data-state">인식된 음식이 없어요. 다른 사진으로 다시 시도해 주세요.</p>
-            ) : (
+          draftItems.length === 0 ? (
+            // 인식된 음식이 0개인 경우(음식이 아닌 사진, 또는 아무것도 못 알아본 경우).
+            // 예전엔 "확신이 낮아요 / 지워주세요 / 0% / (비활성)확인하고 저장하기"를
+            // 그대로 띄워 앞뒤가 안 맞는 화면이 됐다 — 전용 안내 카드로 분리한다.
+            <div className="vision-error is-soft" role="status">
+              <span aria-hidden="true" />
+              <h3>사진 속에서 음식을 찾지 못했어요.</h3>
+              <p>음식이 화면에 크고 선명하게 담기도록 다시 찍어 올려주시면 더 정확하게 계산할 수 있어요.</p>
+              <div>
+                <button type="button" onClick={() => { setDraftItems(null); setDraftConfidence(null); resetPhoto(); }}>다른 사진 올리기</button>
+              </div>
+            </div>
+          ) : (
+            <div className="vision-draft">
+              <p className="eyebrow">사진 인식 확신이 낮아요</p>
+              <h3>인식된 음식을 확인하고 필요하면 지워주세요</h3>
+              {draftConfidence != null && <small>인식 확신도 {Math.round(draftConfidence * 100)}%</small>}
+              {confirmState === "error" && <p className="vision-file-error" role="alert">확정하지 못했어요. 다시 시도해 주세요.</p>}
               <ul className="vision-draft-list">
                 {draftItems.map((item, index) => (
                   <li key={`${item.name}-${index}`}>
@@ -499,19 +509,19 @@ export function RecordMealModal({
                   </li>
                 ))}
               </ul>
-            )}
-            <footer className="mini-detail-actions">
-              <button type="button" onClick={() => { setDraftItems(null); setDraftConfidence(null); resetPhoto(); }}>다른 사진으로 다시 시도</button>
-              <button
-                type="button"
-                className="solid-button"
-                onClick={confirmDraft}
-                disabled={draftItems.length === 0 || confirmState === "confirming"}
-              >
-                {confirmState === "confirming" ? "저장하고 있어요" : "확인하고 저장하기"}
-              </button>
-            </footer>
-          </div>
+              <footer className="mini-detail-actions">
+                <button type="button" onClick={() => { setDraftItems(null); setDraftConfidence(null); resetPhoto(); }}>다른 사진으로 다시 시도</button>
+                <button
+                  type="button"
+                  className="solid-button"
+                  onClick={confirmDraft}
+                  disabled={confirmState === "confirming"}
+                >
+                  {confirmState === "confirming" ? "저장하고 있어요" : "확인하고 저장하기"}
+                </button>
+              </footer>
+            </div>
+          )
         ) : !selected ? (
           <>
             <div className="entry-source-tabs">{sourceTabs.map((tab) => <button type="button" className={source === tab.id ? "is-active" : ""} key={tab.id} onClick={() => { setSource(tab.id); setCategory("전체"); }}>{tab.label}</button>)}</div>
