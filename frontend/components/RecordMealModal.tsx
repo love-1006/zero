@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { RecordDateNavigator } from "@/components/RecordDateNavigator";
+import { SafeImage } from "@/components/SafeImage";
 import { LoginPromptDialog } from "@/components/SystemFeedback";
 import { products, recipes } from "@/data/catalog";
 import { PRODUCT_CATEGORIES } from "@/data/taxonomy";
@@ -50,6 +51,7 @@ type FoodItem = {
   calories: number;
   note: string;
   href: string;
+  image?: string;
   favorite?: boolean;
   nutritionAvailable: boolean;
 };
@@ -141,6 +143,7 @@ export function RecordMealModal({
         calories: recipe.estimatedCalories,
         note: Number(recipe.nutritionCoverage ?? 0) > 0 ? `${recipe.summary} 등록된 재료 영양값을 합산했어요.` : "자세한 재료와 영양정보는 상세에서 확인할 수 있어요.",
         href: `/recipes/${id}`,
+        image: recipe.thumbnail,
         favorite: favoriteRecipeIds.has(id),
         nutritionAvailable: Number(recipe.nutritionCoverage ?? 0) > 0,
       };
@@ -157,6 +160,7 @@ export function RecordMealModal({
       calories: product.calories,
       note: `${product.summary} ${product.serving} 기준이에요.`,
       href: `/product/${id}`,
+      image: product.image,
       favorite: favoriteProductIds.has(id),
       nutritionAvailable: product.nutritionAvailable !== false,
     };
@@ -318,6 +322,7 @@ export function RecordMealModal({
         calories: Math.round(analyzedCalories),
         note: "AI가 사진에서 인식한 결과예요. 양을 조절하면 다시 계산할 수 있어요.",
         href: "/diet",
+        image: photoPreview ?? undefined,
         nutritionAvailable: true,
       });
       return;
@@ -333,6 +338,7 @@ export function RecordMealModal({
       calories: 0,
       note: "사진은 서버에 등록했어요. 분석이 끝나면 실제 영양정보로 표시할게요.",
       href: "/diet",
+      image: photoPreview ?? undefined,
       nutritionAvailable: false,
     });
   }
@@ -366,6 +372,7 @@ export function RecordMealModal({
         calories: Math.round(analyzedCalories),
         note: "확인한 내용으로 저장했어요.",
         href: "/diet",
+        image: photoPreview ?? undefined,
         nutritionAvailable: true,
       });
       setDraftItems(null);
@@ -559,8 +566,10 @@ export function RecordMealModal({
         ) : (
           <div className="mini-detail">
             <div className="mini-detail-summary">
-              <div className="mini-food-art"><span>{selected.category}</span><strong>{selected.kind}</strong></div>
-              <div><small>{selected.kind}</small><h3>{selected.name}</h3><p>{selected.note}</p><Link href={selected.href}>영양 정보 더 보기 →</Link></div>
+              {selected.image
+                ? <div className="mini-food-art has-photo"><SafeImage src={selected.image} alt={`${selected.name} 사진`} fallbackLabel={selected.category} /></div>
+                : <div className="mini-food-art"><span>{selected.category}</span><strong>{selected.kind}</strong></div>}
+              <div><small>{selected.kind}</small><h3>{selected.name}</h3>{selected.nutritionAvailable && <p className="mini-detail-macros">당류 {sugarText(selected.sugar)}g · {selected.calories.toLocaleString()}kcal</p>}<p>{selected.note}</p><Link href={selected.href}>영양 정보 더 보기 →</Link></div>
             </div>
             {selected.nutritionAvailable ? <div className="projected-change">
               <p className="eyebrow">담으면 이렇게 바뀌어요</p>
