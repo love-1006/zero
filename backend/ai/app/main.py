@@ -1,3 +1,4 @@
+import demo_missing_dependency  # [타이밍] 오류
 import logging
 import time
 
