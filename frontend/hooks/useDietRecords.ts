@@ -226,6 +226,14 @@ export function useDietRecords() {
         ...current,
         [dateKey]: (current[dateKey] ?? []).filter((item) => item.id !== record.id),
       }));
+      // RecordMealModal이 사진 기록을 저장할 때 source:"server"인 항목을 다른
+      // 화면에도 즉시 보이도록 localStorage에도 남겨둔다(addRecord 참고) — 이
+      // 항목을 지울 때 localStorage 쪽을 안 건드리면, 실제로는 DB에서 지워졌는데도
+      // 하드 리프레시를 해도 계속 보이고 계속 404만 나는 유령 기록이 됐었다.
+      updateRecords((current) => ({
+        ...current,
+        [dateKey]: (current[dateKey] ?? []).filter((item) => item.id !== record.id),
+      }));
       return;
     }
     updateRecords((current) => ({
@@ -323,12 +331,33 @@ export function useDietRecords() {
         ...Object.fromEntries(Object.entries(current).filter(([key]) => !key.startsWith(monthPrefix))),
         ...next,
       }));
+
+      // RecordMealModal이 사진 기록을 확정하면(saveItem) 다른 화면에도 바로 보이게
+      // localStorage에도 source:"server" 항목을 임시로 남겨둔다(addRecord) — 이 달의
+      // 진짜 서버 데이터를 방금 받아왔으니 그 임시 항목은 이제 필요 없다. 안 지우면
+      // (a) entryId 기준 새 항목과 id가 달라 같은 기록이 중복으로 두 번 보이고
+      // (b) 그 임시 항목은 지워도 삭제 대상(recordId)만 사라질 뿐 localStorage에는
+      // 영원히 남아서, 실제로 DB에서 지워진 뒤에도 하드 리프레시로도 안 없어지는
+      // 유령 기록이 된다.
+      updateRecords((current) => {
+        let changed = false;
+        const pruned: DietRecordsByDate = { ...current };
+        Object.keys(pruned).forEach((dateKey) => {
+          if (!dateKey.startsWith(monthPrefix)) return;
+          const withoutServerOnly = pruned[dateKey].filter((item) => item.source !== "server");
+          if (withoutServerOnly.length !== pruned[dateKey].length) {
+            pruned[dateKey] = withoutServerOnly;
+            changed = true;
+          }
+        });
+        return changed ? pruned : current;
+      });
     } catch {
       setServerError("서버의 식단 기록을 불러오지 못했어요.");
     } finally {
       setServerLoading(false);
     }
-  }, []);
+  }, [updateRecords]);
 
   const recordsByDate = useMemo(() => {
     const merged: DietRecordsByDate = { ...localRecordsByDate };
