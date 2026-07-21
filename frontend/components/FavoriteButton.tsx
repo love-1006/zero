@@ -21,11 +21,12 @@ async function isAlreadyFavorited(kind: FavoriteKind, id: string | number, token
 }
 
 // 2026-07-19: 서버 찜 API(PR-0307/0308, RC-0111/0112)에 실제로 연결한다.
-// 목록(피드) 카드는 항목 수만큼 벌크 조회를 반복하는 N+1을 피하려고 checkInitial을
-// 안 켠다 — initial prop 그대로 항상 false로 시작. 상세 페이지는 인스턴스가 하나뿐이라
-// checkInitial로 서버에 이미 찜해둔 상태인지 확인한다. 이게 없으면 찜은 실제로 잘
-// 저장되는데(POST는 성공) 페이지를 새로고침하거나 다시 들어올 때마다 항상 false로
-// 초기화돼서 마치 찜이 풀린 것처럼 보이는 버그가 있었다.
+// 상세 페이지는 인스턴스가 하나뿐이라 checkInitial로 서버에 이미 찜해둔 상태인지
+// 그 버튼이 직접 확인한다. 목록(피드) 카드는 항목 수만큼 벌크 조회를 반복하는
+// N+1을 피하려고 checkInitial을 안 켜는 대신, 부모(RecipeFeed.tsx 등)가 즐겨찾기
+// 목록을 한 번만 불러와 Set으로 대조한 결과를 initial prop으로 내려준다. 이게
+// 없으면 찜은 실제로 잘 저장되는데(POST는 성공) 페이지를 새로고침하거나 다시
+// 들어올 때마다 항상 false로 초기화돼서 마치 찜이 풀린 것처럼 보이는 버그가 있었다.
 function useFavoriteToggle(id: string | number | null | undefined, kind: FavoriteKind, initial: boolean, checkInitial = false) {
   const { ready, signedIn, token } = useAuthSession();
   const [liked, setLiked] = useState(initial);
@@ -46,6 +47,14 @@ function useFavoriteToggle(id: string | number | null | undefined, kind: Favorit
       active = false;
     };
   }, [checkInitial, ready, signedIn, token, id, kind]);
+
+  // 목록(피드) 카드는 부모가 즐겨찾기 목록을 한 번에 불러와 initial prop으로
+  // 내려준다(RecipeFeed.tsx 등) — 그 조회가 마운트 이후 비동기로 끝나면서
+  // initial이 false->true로 바뀌는데, useState(initial)은 최초 렌더 값만 쓰고
+  // 이후 initial 변경을 무시해서 하트가 계속 "안 찜"으로 보이는 문제가 있었다.
+  useEffect(() => {
+    if (initial) setLiked(true);
+  }, [initial]);
 
   async function toggleFavorite() {
     if (!ready || !signedIn) {

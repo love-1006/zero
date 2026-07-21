@@ -6,8 +6,9 @@ import { SafeImage } from "@/components/SafeImage";
 import { FavoriteIconButton } from "@/components/FavoriteButton";
 import { products as mockProducts } from "@/data/catalog";
 import { PRODUCT_CATEGORIES, SWEETENER_FILTERS } from "@/data/taxonomy";
+import { useAuthSession } from "@/hooks/useAuthSession";
 import { useProductCatalog } from "@/hooks/useProductCatalog";
-import { getSearchRecommendations } from "@/lib/api/zerocheck";
+import { getProductFavorites, getSearchRecommendations } from "@/lib/api/zerocheck";
 
 const personalSlugs = new Set([
   "lalasweet-low-sugar-soymilk",
@@ -27,6 +28,23 @@ export function ProductFeed() {
   const [suggestions, setSuggestions] = useState<Array<{ id: string; name: string }>>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const sentinel = useRef<HTMLDivElement>(null);
+  const { ready: authReady, signedIn, token } = useAuthSession();
+  const [favoriteProductIds, setFavoriteProductIds] = useState<Set<string>>(new Set());
+
+  // 목록 카드마다 즐겨찾기 여부를 개별 조회하면 N+1이라, 즐겨찾기 목록을 한 번만
+  // 통으로 불러와 Set으로 대조한다(RecordMealModal.tsx/RecipeFeed.tsx와 같은 패턴).
+  useEffect(() => {
+    if (!authReady || !signedIn || !token) return;
+    let active = true;
+    getProductFavorites(token).then((result) => {
+      if (active) setFavoriteProductIds(new Set(result["list-products"].map((item) => item.id)));
+    }).catch(() => {
+      // 조회 실패해도 하트는 기본(안 찜) 상태로 남는다 — 눌러서 다시 저장할 수 있다.
+    });
+    return () => {
+      active = false;
+    };
+  }, [authReady, signedIn, token]);
 
   const categories = ["전체", ...PRODUCT_CATEGORIES.map((item) => item.label)];
   const sweeteners = ["전체", ...SWEETENER_FILTERS];
@@ -122,7 +140,7 @@ export function ProductFeed() {
               <article className="product-feed-card" key={key}>
                 <Link href={`/product/${key}`} className="product-feed-art"><div className="product-photo-card"><SafeImage src={product.image} alt={`${product.title} 제품 이미지`} fallbackLabel="제품 이미지 준비 중" /></div><span>{product.category}</span></Link>
                 <div><small>{product.brand}{product.nutritionAvailable === false ? "" : ` · ${product.serving} 기준`}</small><h2><Link href={`/product/${key}`}>{product.title}</Link></h2>{product.nutritionAvailable === false ? <p>영양정보는 상세에서 확인해 주세요.</p> : <p>당류 <b>{product.sugar}g</b> · {product.calories}kcal</p>}<em>{product.sweeteners[0] ?? "원재료 확인"}</em></div>
-                <FavoriteIconButton label={product.title} id={product.backendId} kind="product" />
+                <FavoriteIconButton label={product.title} id={product.backendId} kind="product" initial={favoriteProductIds.has(String(product.backendId))} />
               </article>
             )})}
           </div>
