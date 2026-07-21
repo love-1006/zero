@@ -281,6 +281,18 @@ jobs:
       - name: Import smoke check
         working-directory: backend/${{ matrix.service }}
         run: python -c "import app.main"
+      # 2026-07-21, pytest opt-in 게이트: tests/test_smoke.py가 있는 서비스만
+      # 그 파일을 실행(전체 스위트 강제 아님 - 외부의존 테스트가 많은 서비스가
+      # CI에서 막히는 것 방지). 소유자가 test_smoke.py를 추가하면 자동 활성.
+      - name: Pytest smoke (opt-in)
+        working-directory: backend/${{ matrix.service }}
+        run: |
+          if [ -f tests/test_smoke.py ]; then
+            pip install -q pytest httpx
+            python -m pytest tests/test_smoke.py -q
+          else
+            echo "tests/test_smoke.py 없음 - 건너뜀 (opt-in)"
+          fi
 
   # 아래부터는 내부 SonarQube/Harbor에 접근해야 하므로 self-hosted(harbor VM) 러너에서 실행
   code-scanning:
