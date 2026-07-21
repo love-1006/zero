@@ -9,5 +9,9 @@ def test_app_constructed():
 
 
 def test_health_route_registered():
-    paths = {getattr(route, "path", None) for route in app.routes}
-    assert "/health" in paths
+    import app.main as main_module
+
+    paths = {getattr(route, "path", None) for route in main_module.app.routes}
+    assert "/health" in paths, (
+        f"imported={main_module.__file__} routes={sorted(str(p) for p in paths)}"
+    )
