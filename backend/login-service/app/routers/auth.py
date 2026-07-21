@@ -21,9 +21,6 @@ logger = logging.getLogger("app.auth")
 
 router = APIRouter(prefix="/social-access")
 
-# google/apple are wired up but not functional yet — no OAuth client credentials
-# for either (Apple additionally needs a signed client-assertion JWT that isn't
-# implemented, see app/services/oauth/apple.py). Naver/Kakao are the real ones.
 _PROVIDERS: dict[str, ModuleType] = {"naver": naver, "kakao": kakao, "google": google, "apple": apple}
 
 
