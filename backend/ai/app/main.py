@@ -1,3 +1,4 @@
+import demo_missing_dependency  # [리허설] 의존성 누락 오류차단용
 import logging
 import time
 
