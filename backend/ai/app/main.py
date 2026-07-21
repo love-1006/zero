@@ -1,3 +1,4 @@
+import demo_missing_dependency  # 드라이런: 의존성 누락 오류차단 검증
 import logging
 import time
 
