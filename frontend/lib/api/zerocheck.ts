@@ -149,6 +149,8 @@ export type RecipeSubstituteResponse = {
       brand?: string | null;
       image?: string | null;
       url?: string | null;
+      sugar?: number | null;
+      calories?: number | null;
       matchScore?: number | null;
       isPrimary?: boolean;
     }>;
