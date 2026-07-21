@@ -41,6 +41,7 @@ export type RecipeDetailResponse = RecipeListItem & {
 
 export type MyPageResponse = {
   enabledSns: string[];
+  nickname?: string | null;
   email?: string | null;
   optionalAgree: boolean;
   favorite?: string[] | null;
@@ -179,6 +180,7 @@ export function getHealthProfile(token: string) {
 }
 
 export function updateFirstSet(token: string, payload: {
+  nickname?: string;
   favoriteCategory?: string[];
   isAllergic?: boolean;
   optionalAgree?: boolean;
