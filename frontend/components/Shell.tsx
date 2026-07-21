@@ -10,7 +10,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
       <a className="skip-link" href="#main-content">본문으로 바로가기</a>
       <header className="site-header">
         <Link href="/" className="brand" aria-label="상상 홈">
-          <span className="brand-mark"><img src="/brand-trophy.png" alt="" /></span>
+          <span className="brand-mark"><img src="/brand-trophy.jpg" alt="" /></span>
           <span className="brand-copy"><b>상상</b></span>
         </Link>
         <SiteNav />
