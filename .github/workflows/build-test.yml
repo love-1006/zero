@@ -1153,6 +1153,8 @@ jobs:
   # 없앤다.
   notify-on-deploy:
     needs:
+      - detect-backend
+      - detect-frontend
       - backend-deploy-production
       - frontend-deploy-production
       - bgateway-cutover
@@ -1169,15 +1171,33 @@ jobs:
           BACKEND_R: ${{ needs.backend-deploy-production.result }}
           FRONTEND_R: ${{ needs.frontend-deploy-production.result }}
           BGATEWAY_R: ${{ needs.bgateway-cutover.result }}
+          # 2026-07-22, 실제 재배포된 서비스만 표기하기 위한 "이번 커밋에서 바뀐 것" 신호.
+          # backend-deploy-production은 backend 변경이 없어도(no-op) success가 나므로,
+          # deploy job의 success만으로 라벨을 붙이면 프론트만 바뀐 배포에도 "backend
+          # 배포 완료"가 오탐으로 뜬다(실측). detect-* 출력으로 실제 변경을 게이트한다.
+          BACKEND_SERVICES: ${{ needs.detect-backend.outputs.services }}
+          FRONTEND_CHANGED: ${{ needs.detect-frontend.outputs.changed }}
         run: |
           REPO_URL="${{ github.server_url }}/${{ github.repository }}"
           RUN_URL="$REPO_URL/actions/runs/${{ github.run_id }}"
           SHA_SHORT="$(echo '${{ github.sha }}' | cut -c1-8)"
           DEPLOYED=""
           add() { DEPLOYED="${DEPLOYED:+$DEPLOYED, }$1"; }
-          [ "$BACKEND_R" = "success" ] && add "backend"
-          [ "$FRONTEND_R" = "success" ] && add "frontend"
+          # deploy job이 success이고, 그 계층이 이번 커밋에서 실제로 바뀐 경우에만 표기.
+          # backend는 detect-backend.services(바뀐 서비스 배열)가 비어있지 않을 때,
+          # frontend는 detect-frontend.changed가 true일 때만.
+          if [ "$BACKEND_R" = "success" ] \
+             && [ "$BACKEND_SERVICES" != "[]" ] \
+             && [ -n "$BACKEND_SERVICES" ]; then
+            add "backend"
+          fi
+          if [ "$FRONTEND_R" = "success" ] \
+             && [ "$FRONTEND_CHANGED" = "true" ]; then
+            add "frontend"
+          fi
           [ "$BGATEWAY_R" = "success" ] && add "b-gateway"
+          # 실제 재배포된 게 없으면(예: compose 파일만 동기화) 성공 알림을 보내지 않는다.
+          [ -z "$DEPLOYED" ] && exit 0
           TEXT=":white_check_mark: *$DEPLOYED* 프로덕션 배포 완료"
           TEXT="$TEXT (\`${{ github.ref_name }}\` @ $SHA_SHORT)"
           TEXT="$TEXT\n<$RUN_URL|실행 보기>"
