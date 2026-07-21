@@ -376,28 +376,28 @@ jobs:
       # v4
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       # v4
-      # 2026-07-21, 빌드 캐시를 type=gha(GitHub 백엔드)에서 type=registry(같은 LAN의
-      # Harbor)로 전환 - self-hosted 러너가 캐시를 GitHub까지 왕복하지 않게 한다
-      # (Docker 공식 cache backends 문서의 registry 백엔드, docs.docker.com/build/cache/backends/registry/).
-      # 주의 2가지(2026-07-21 러너 VM 실측 근거):
-      #  - harbor.hizero.local은 러너 VM의 /etc/hosts로만 해석되고 TLS 신뢰도
-      #    dockerd 전용 certs.d에만 있다. BuildKit 컨테이너(container driver)는
-      #    둘 다 물려받지 못하므로, 캐시 레지스트리는 IP(192.168.0.53)로 참조하고
-      #    아래 buildkitd 설정으로 self-signed 검증을 건너뛴다(LAN 내부 + robot
-      #    계정 한정 - Harbor 웹 UI도 같은 IP로 상시 사용 중인 검증된 경로).
-      #  - 캐시 pull/push 인증은 빌드보다 먼저 필요하다. 기존 harbor.hizero.local
-      #    로그인은 push 스텝 직전이라 캐시 시점엔 늦어서, IP 대상 로그인을
-      #    빌드 앞에 별도로 둔다(config.json에 host별로 나란히 저장됨).
+      # 2026-07-21, 빌드 캐시를 type=gha(GitHub 백엔드)에서 type=registry(같은
+      # LAN의 Harbor)로 전환 - self-hosted 러너가 캐시를 GitHub까지 왕복하지
+      # 않게 한다(Docker 공식 cache backends 문서의 registry 백엔드).
+      # BuildKit 컨테이너는 러너 VM의 /etc/hosts(harbor.hizero.local 해석)와
+      # dockerd 전용 certs.d(TLS 신뢰)를 물려받지 못한다. 1차 시도에서 IP 우회
+      # 로그인이 daemon TLS 검증(certs.d는 호스트명 단위)에 걸리는 것까지 실측.
+      # 그래서:
+      #  - driver-opts network=host: 호스트 네트워크 컨테이너는 호스트의
+      #    /etc/hosts를 그대로 보므로 이름 해석이 BuildKit 안에서도 된다
+      #  - buildkitd insecure: self-signed 인증서 검증 생략(LAN+robot 한정)
+      #  - 캐시 pull/push 인증은 빌드보다 먼저 필요해 로그인을 빌드 앞에 둔다
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # yamllint disable-line rule:line-length
         with:
+          driver-opts: network=host
           buildkitd-config-inline: |
-            [registry."192.168.0.53"]
+            [registry."harbor.hizero.local"]
               insecure = true
-      - name: Log in to Harbor (IP, for build cache)
-        # v3 - logout:false 이유는 아래 "Log in to Harbor" 스텝 주석 참고(공유 config.json 레이스)
+      - name: Log in to Harbor (before build, for cache)
+        # v3 - logout:false 이유는 아래 push용 로그인 스텝 주석 참고
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
-          registry: 192.168.0.53
+          registry: harbor.hizero.local
           username: ${{ secrets.HARBOR_ROBOT_USER }}
           password: ${{ secrets.HARBOR_ROBOT_TOKEN }}
           logout: false
@@ -409,8 +409,10 @@ jobs:
           pull: true
           tags: backend-${{ matrix.service }}:${{ github.sha }}
           load: true
-          cache-from: type=registry,ref=192.168.0.53/dangdang/build-cache:${{ matrix.service }}
-          cache-to: type=registry,ref=192.168.0.53/dangdang/build-cache:${{ matrix.service }},mode=max,image-manifest=true,oci-mediatypes=true
+          # yamllint disable rule:line-length
+          cache-from: type=registry,ref=harbor.hizero.local/dangdang/build-cache:${{ matrix.service }}
+          cache-to: type=registry,ref=harbor.hizero.local/dangdang/build-cache:${{ matrix.service }},mode=max,image-manifest=true,oci-mediatypes=true
+          # yamllint enable rule:line-length
       # setup-trivy 기본 설치 경로가 $HOME/.local/bin/trivy-bin로 고정돼 있어
       # harbor-runner/harbor-runner-2가 동시에 스캔을 돌리면 "Text file busy"로
       # 충돌한다(실제로 재현함). 러너별 경로에 직접 설치하고 trivy-action의 재설치는
@@ -849,17 +851,18 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       # v4
       # 2026-07-21, registry 캐시 전환 - 이유/주의는 backend-image-scanning의
-      # setup-buildx 주석 참고(IP 참조·insecure·선행 로그인 전부 동일).
+      # setup-buildx 주석 참고(network=host·insecure·선행 로그인 전부 동일).
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # yamllint disable-line rule:line-length
         with:
+          driver-opts: network=host
           buildkitd-config-inline: |
-            [registry."192.168.0.53"]
+            [registry."harbor.hizero.local"]
               insecure = true
-      - name: Log in to Harbor (IP, for build cache)
+      - name: Log in to Harbor (before build, for cache)
         # v3
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
-          registry: 192.168.0.53
+          registry: harbor.hizero.local
           username: ${{ secrets.HARBOR_ROBOT_USER }}
           password: ${{ secrets.HARBOR_ROBOT_TOKEN }}
           logout: false
@@ -872,8 +875,10 @@ jobs:
           pull: true
           tags: frontend:${{ github.sha }}
           load: true
-          cache-from: type=registry,ref=192.168.0.53/dangdang/build-cache:frontend
-          cache-to: type=registry,ref=192.168.0.53/dangdang/build-cache:frontend,mode=max,image-manifest=true,oci-mediatypes=true
+          # yamllint disable rule:line-length
+          cache-from: type=registry,ref=harbor.hizero.local/dangdang/build-cache:frontend
+          cache-to: type=registry,ref=harbor.hizero.local/dangdang/build-cache:frontend,mode=max,image-manifest=true,oci-mediatypes=true
+          # yamllint enable rule:line-length
       # backend-image-scanning과 같은 이유(setup-trivy 기본 설치 경로가
       # $HOME/.local/bin/trivy-bin 고정이라 harbor-runner/harbor-runner-2가 동시에
       # 돌면 "Text file busy"로 충돌 - 실제로 2번 재현/확인함) - 러너별 경로에 직접 설치.
