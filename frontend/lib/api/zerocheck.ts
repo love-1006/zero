@@ -1,4 +1,4 @@
-import { ApiError, apiRequest } from "@/lib/api/client";
+import { API_PREFIX, ApiError, apiRequest } from "@/lib/api/client";
 
 export type GaugeResponse = {
   cal: number;
@@ -382,6 +382,74 @@ export function sendChatbotMessage(msg: string, token?: string | null, template?
     method: "POST",
     body: JSON.stringify({ msg, ...(token ? { usr: token } : {}), ...(template ? { template } : {}) }),
   });
+}
+
+export type ChatbotStreamEvent =
+  | { type: "delta"; text: string }
+  | { type: "done"; meta: Pick<ChatbotResponse, "cs-partner" | "time" | "is-img"> }
+  | { type: "error"; message: string };
+
+// 2026-07-21 chatbot-streaming-design.md 반영 — 답변을 다 만든 뒤 한 번에 받는 대신
+// SSE(delta 단위)로 흘려받는다. apiRequest는 완결된 JSON 응답 하나를 기대하는
+// 헬퍼라 스트림 파싱과는 안 맞아서, 여기선 직접 fetch + reader로 처리한다.
+export async function streamChatbotMessage(
+  msg: string,
+  token: string | null | undefined,
+  onEvent: (event: ChatbotStreamEvent) => void,
+  template?: string,
+): Promise<void> {
+  const response = await fetch(`${API_PREFIX}/ai/chatbot/stream`, {
+    method: "POST",
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    body: JSON.stringify({ msg, ...(token ? { usr: token } : {}), ...(template ? { template } : {}) }),
+  });
+
+  if (!response.ok || !response.body) {
+    throw new ApiError("스트리밍 응답을 받지 못했어요.", response.status);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? ""; // 마지막 조각은 아직 줄이 안 끝났을 수 있어 버퍼에 남긴다
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data:")) continue;
+      const jsonText = trimmed.slice(5).trim();
+      if (!jsonText) continue;
+
+      let payload: Record<string, unknown>;
+      try {
+        payload = JSON.parse(jsonText);
+      } catch {
+        continue;
+      }
+
+      if (typeof payload.delta === "string") {
+        onEvent({ type: "delta", text: payload.delta });
+      } else if (payload.error) {
+        onEvent({ type: "error", message: String(payload.error) });
+      } else if (payload.done) {
+        onEvent({
+          type: "done",
+          meta: {
+            "cs-partner": payload["cs-partner"] as string | null | undefined,
+            time: payload.time as string | null | undefined,
+            "is-img": payload["is-img"] as boolean | undefined,
+          },
+        });
+      }
+    }
+  }
 }
 
 export function unlinkSocialAccount(token: string, provider: string) {
