@@ -6,7 +6,9 @@ import { RecipeCover } from "@/components/RecipeCover";
 import { FavoriteIconButton } from "@/components/FavoriteButton";
 import { recipes as mockRecipes } from "@/data/catalog";
 import { RECIPE_CATEGORIES } from "@/data/taxonomy";
+import { useAuthSession } from "@/hooks/useAuthSession";
 import { useRecipeCatalog } from "@/hooks/useRecipeCatalog";
+import { getRecipeFavorites } from "@/lib/api/zerocheck";
 
 const personalSlugs = new Set(mockRecipes.filter((recipe) => recipe.category === "한 끼" || recipe.category === "반찬").slice(0, 6).map((recipe) => recipe.slug));
 const personalIds = new Set(mockRecipes.filter((recipe) => personalSlugs.has(recipe.slug)).map((recipe) => recipe.databaseId).filter(Boolean));
@@ -19,6 +21,25 @@ export function RecipeFeed() {
   const [personalOnly, setPersonalOnly] = useState(false);
   const [visible, setVisible] = useState(6);
   const sentinel = useRef<HTMLDivElement>(null);
+  const { ready: authReady, signedIn, token } = useAuthSession();
+  const [favoriteRecipeIds, setFavoriteRecipeIds] = useState<Set<string>>(new Set());
+
+  // 목록 카드마다 즐겨찾기 여부를 개별 조회하면 N+1이라, 즐겨찾기 목록을 한 번만
+  // 통으로 불러와 Set으로 대조한다(RecordMealModal.tsx와 같은 패턴) — 이게
+  // 없으면 찜 저장/해제는 잘 되는데 목록을 다시 불러올 때마다 항상 "안 찜"
+  // 상태로 보이는 문제가 있었다.
+  useEffect(() => {
+    if (!authReady || !signedIn || !token) return;
+    let active = true;
+    getRecipeFavorites(token).then((result) => {
+      if (active) setFavoriteRecipeIds(new Set(result["list-receipe"].map((item) => String(item.id))));
+    }).catch(() => {
+      // 조회 실패해도 하트는 기본(안 찜) 상태로 남는다 — 눌러서 다시 저장할 수 있다.
+    });
+    return () => {
+      active = false;
+    };
+  }, [authReady, signedIn, token]);
 
   const availableCategories = new Set(recipes.map((recipe) => recipe.category));
   const categories = ["전체", ...RECIPE_CATEGORIES.filter((item) => availableCategories.has(item))];
@@ -93,7 +114,7 @@ export function RecipeFeed() {
               <article className="feed-card" key={key}>
                 <Link href={`/recipes/${key}`} className="feed-image"><RecipeCover recipe={recipe} /></Link>
                 <div className="feed-card-copy"><small>{recipe.author}{recipe.nutritionCoverage ? ` · 영양 계산 ${recipe.nutritionCoverage}%` : ""}</small><h2><Link href={`/recipes/${key}`}>{recipe.title}</Link></h2><p>{recipe.nutritionCoverage ? <>등록 재료 합계 <b>당류 {recipe.estimatedSugar}g</b> · {recipe.estimatedCalories}kcal</> : "영양정보를 확인하고 있어요."}</p></div>
-                <FavoriteIconButton label={recipe.title} id={recipe.databaseId} kind="recipe" />
+                <FavoriteIconButton label={recipe.title} id={recipe.databaseId} kind="recipe" initial={favoriteRecipeIds.has(String(recipe.databaseId))} />
               </article>
             )})}
           </div>
