@@ -830,7 +830,7 @@ jobs:
           fi
 
   # frontend/ 이미지 - build-once 전략(2026-07-22 도입).
-  #  - PR run: 빌드 + Trivy 스캔 + staging repo(dangdang/frontend-staging:<PR head sha>) push.
+  #  - PR run: build+scan 후 dangdang/frontend-staging:<PR head sha>로 push.
   #  - main run: 재빌드/재스캔 없이, PR 때 스캔된 그 이미지를 production repo(dangdang/frontend)
   #    로 digest 승격(docker buildx imagetools create). "스캔된 바로 그 바이트"가 배포됨.
   #    PR head sha는 머지 방식(merge/squash/rebase) 무관하게 GitHub "commit->PR" API로
