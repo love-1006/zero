@@ -407,7 +407,70 @@ jobs:
           username: ${{ secrets.HARBOR_ROBOT_USER }}
           password: ${{ secrets.HARBOR_ROBOT_TOKEN }}
           logout: false
+      # ---- build-once (2026-07-23): frontend와 동일 패턴을 매트릭스에 적용 ----
+      # PR run: 서비스별 build+scan 후 staging repo push. main run: 재빌드 없이
+      # PR 때 스캔된 이미지를 production repo로 digest 승격(+무결성 검증). 소스
+      # 부재 시 fallback 빌드(아래 스텝 if 참고). PR head sha는 공식
+      # actions/github-script + commit->PR API로 조회(러너 gh 의존 없음).
+      - name: Resolve PR head sha (main only)
+        id: prhead
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        # v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        with:
+          result-encoding: string
+          script: |
+            const { data: prs } =
+              await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                commit_sha: context.sha,
+              });
+            return prs.length ? prs[0].head.sha : '';
+      - name: Check staging source (main only)
+        id: src
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          SVC="${{ matrix.service }}"
+          STAGING="harbor.hizero.local/dangdang-backend/$SVC-staging"
+          HEAD_SHA="${{ steps.prhead.outputs.result }}"
+          FOUND="false"
+          if [ -n "$HEAD_SHA" ] && \
+             docker buildx imagetools inspect \
+               "$STAGING:$HEAD_SHA" >/dev/null 2>&1; then
+            FOUND="true"
+          fi
+          {
+            echo "head_sha=$HEAD_SHA"
+            echo "found=$FOUND"
+            echo "staging=$STAGING"
+          } >> "$GITHUB_OUTPUT"
+          echo "[$SVC] promote src: head=$HEAD_SHA found=$FOUND"
+      - name: Promote staging image (digest copy)
+        if: steps.src.outputs.found == 'true'
+        run: |
+          SVC="${{ matrix.service }}"
+          STAGING="${{ steps.src.outputs.staging }}"
+          HEAD_SHA="${{ steps.src.outputs.head_sha }}"
+          IMAGE="harbor.hizero.local/dangdang-backend/$SVC"
+          SHA="${{ github.sha }}"
+          SRC="sha256:$(docker buildx imagetools inspect --raw \
+            "$STAGING:$HEAD_SHA" | sha256sum | cut -d' ' -f1)"
+          docker buildx imagetools create \
+            -t "$IMAGE:$SHA" -t "$IMAGE:latest" "$STAGING:$HEAD_SHA"
+          DST_RAW="$(docker buildx imagetools inspect --raw "$IMAGE:$SHA")"
+          DST="sha256:$(printf '%s' "$DST_RAW" | sha256sum | cut -d' ' -f1)"
+          MATCH=false
+          if [ "$DST" = "$SRC" ]; then MATCH=true; fi
+          if printf '%s' "$DST_RAW" | grep -q "$SRC"; then MATCH=true; fi
+          if [ "$MATCH" = true ]; then
+            echo "[$SVC] integrity OK: $DST refs/eq $SRC"
+          else
+            echo "::error::[$SVC] promoted != scanned $SRC"
+            exit 1
+          fi
       - name: Build image
+        if: github.event_name == 'pull_request' || steps.src.outputs.found == 'false'  # yamllint disable-line rule:line-length
         # v7
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
@@ -422,11 +485,13 @@ jobs:
       # 충돌한다(실제로 재현함). 러너별 경로에 직접 설치하고 trivy-action의 재설치는
       # 건너뛴다.
       - name: Install Trivy (per-runner path)
+        if: github.event_name == 'pull_request' || steps.src.outputs.found == 'false'  # yamllint disable-line rule:line-length
         # v0.2.6
         uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514
         with:
           path: /home/bruce/.trivy-bin/${{ runner.name }}
       - name: Trivy vulnerability scan
+        if: github.event_name == 'pull_request' || steps.src.outputs.found == 'false'  # yamllint disable-line rule:line-length
         # v0.36.0
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
         with:
@@ -458,12 +523,25 @@ jobs:
       # 없이 달성된다. workflow_dispatch도 push 안 함(수동 재배포는 기존 태그
       # 재사용이라 새 push 불요). Docker 공식 CI 문서의 조건부 push
       # (push: github.event_name != 'pull_request') 표준 패턴과 동일 취지.
-      - name: Tag and push (sha + latest)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      # ---- PR run: staging repo push(승격 소스). 미병합 이미지는 staging에만. ----
+      - name: Push to staging (build-once source)
+        if: github.event_name == 'pull_request'
         run: |
-          IMAGE="harbor.hizero.local/dangdang-backend/${{ matrix.service }}"
+          SVC="${{ matrix.service }}"
+          STAGING="harbor.hizero.local/dangdang-backend/$SVC-staging"
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
           SHA="${{ github.sha }}"
-          LOCAL="backend-${{ matrix.service }}:$SHA"
+          docker tag "backend-$SVC:$SHA" "$STAGING:$HEAD_SHA"
+          docker push "$STAGING:$HEAD_SHA"
+      # ---- main fallback: 스캔한 이미지를 production repo로 push(구 동작) ----
+      - name: Tag and push (main fallback, sha + latest)
+        if: steps.src.outputs.found == 'false'
+        run: |
+          SVC="${{ matrix.service }}"
+          IMAGE="harbor.hizero.local/dangdang-backend/$SVC"
+          SHA="${{ github.sha }}"
+          LOCAL="backend-$SVC:$SHA"
+          echo "::warning::[$SVC] build-once source missing - fallback"
           docker tag "$LOCAL" "$IMAGE:$SHA"
           docker tag "$LOCAL" "$IMAGE:latest"
           docker push "$IMAGE:$SHA"
