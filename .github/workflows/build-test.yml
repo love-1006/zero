@@ -203,28 +203,52 @@ jobs:
       # 바꾼다. backend/services는 실제 서비스가 아니라 문서(.md) 폴더라 예외.
       # 새 backend/<name> 디렉터리가 생기면 이 job이 즉시 실패하면서 어디를
       # 고쳐야 하는지 알려준다 - PR #52처럼 아무도 못 알아채고 넘어가는 걸 방지.
-      - name: Fail loudly if a backend/ dir is missing from known services
+      # 2026-07-24, 이 가드가 실제로는 자기 주장을 검증하지 않고 있었다.
+      # 에러 메시지는 "paths-filter / SERVICES / PORTS 세 곳에 다 넣어라"라고
+      # 하는데, 검사 대상은 그 셋이 아니라 이 스텝 안의 KNOWN 목록 하나뿐이었다.
+      # 즉 새 서비스를 KNOWN에만 넣고 SERVICES나 PORTS를 빠뜨리면 가드는
+      # 통과하고, 그 서비스는 빌드/스캔은 되는데 배포에서 조용히 빠진다 -
+      # PR #52에서 겪은 "조용한 스킵"이 가드를 켜둔 채로도 그대로 재현되는
+      # 상태였다. KNOWN이라는 네 번째 하드코딩 목록 자체가 위험 요소이기도 했다.
+      #
+      # 이제 KNOWN을 없애고 워크플로우 파일 자신을 읽어 실제 세 목록을 직접
+      # 대조한다. 목록을 하나 줄이면서(4개 -> 3개), 가드가 말하는 내용과
+      # 검사하는 내용을 일치시킨다.
+      - name: Fail loudly if a backend/ dir isn't wired into all three lists
         if: steps.check.outputs.exists == 'true'
         run: |
-          KNOWN="admin-service ai community-service diet-service
-                 ingredients-service login-service main-service
-                 product-service recipe-service"
+          WF=.github/workflows/build-test.yml
+          # SERVICES는 여러 줄 folded 스칼라라 블록만 잘라내서 대조한다.
+          # 종료 조건은 "다음 키"가 아니라 "스칼라 본문 들여쓰기(8칸)를 벗어남"
+          # 이어야 한다 - 다음 키 기준으로 자르면 사이에 낀 주석까지 블록에
+          # 딸려 들어와, 주석에서만 언급된 서비스명이 배선된 것처럼 통과한다
+          # (2026-07-24 이 가드를 실제로 돌려보다 발견).
+          SERVICES_BLOCK=$(awk '
+            /^      SERVICES: >-/ {f=1; next}
+            f && !/^        [a-z]/ {f=0}
+            f {print}
+          ' "$WF")
+          RC=0
           for dir in backend/*/; do
+            [ -d "$dir" ] || continue
             name="$(basename "$dir")"
             [ "$name" = "services" ] && continue
-            match=0
-            for k in $KNOWN; do
-              [ "$k" = "$name" ] && match=1 && break
-            done
-            if [ "$match" = "0" ]; then
-              echo "::error::backend/$name exists but isn't in" \
-                "detect-backend's paths-filter or" \
-                "backend-deploy-production's SERVICES list/PORTS map." \
-                "Add it to all three before this service can" \
-                "build/scan/deploy."
-              exit 1
+            missing=""
+            grep -q "^            $name: 'backend/$name/\*\*'$" "$WF" \
+              || missing="$missing detect-backend의-paths-filter"
+            printf '%s' "$SERVICES_BLOCK" \
+              | grep -qE "(^|[[:space:]])$name([[:space:]]|$)" \
+              || missing="$missing backend-deploy-production의-SERVICES"
+            grep -q "\[$name\]=" "$WF" \
+              || missing="$missing backend-deploy-production의-PORTS"
+            if [ -n "$missing" ]; then
+              echo "::error::backend/$name 이(가) 다음에 빠져 있습니다:" \
+                "$missing. 세 곳 모두에 추가해야 build/scan/deploy가" \
+                "정상 동작합니다(하나라도 빠지면 조용히 스킵됩니다)."
+              RC=1
             fi
           done
+          exit $RC
 
   # detect-backend와 같은 이유로 별도 job - frontend/ 존재 여부와 변경 여부를 체크아웃 후
   # 확인해서 넘긴다(2026-07-17 성애님 frontend/ 브랜치 인수 - sungA/front/main).
@@ -272,25 +296,36 @@ jobs:
       # 일이, 앞으로 frontend-<앱>이 추가될 때 그대로 재현될 수 있다.
       # 새 프론트 앱 디렉터리가 생기면 이 job이 즉시 실패하면서 어디를
       # 고쳐야 하는지 알려준다.
-      - name: Fail loudly if a frontend app dir is unknown to this workflow
+      # detect-backend의 가드와 같은 방식으로, KNOWN 목록 대신 워크플로우 파일
+      # 자신을 읽어 실제 배선을 대조한다(그쪽 주석의 2026-07-24 근거 참고 -
+      # 처음엔 여기도 KNOWN 목록으로 만들었다가 같은 결함이라 함께 고쳤다).
+      # 프론트 앱은 paths-filter / build-test / image-scanning / sonar sources
+      # 네 곳에 배선돼야 하고, 하나라도 빠지면 그 앱은 조용히 스킵되거나
+      # (더 나쁘게는) 정적분석 없이 배포된다.
+      - name: Fail loudly if a frontend app dir isn't fully wired
         run: |
-          KNOWN="frontend frontend-admin"
+          WF=.github/workflows/build-test.yml
+          RC=0
           for dir in frontend*/; do
             [ -d "$dir" ] || continue
             name="$(basename "$dir")"
-            match=0
-            for k in $KNOWN; do
-              [ "$k" = "$name" ] && match=1 && break
-            done
-            if [ "$match" = "0" ]; then
-              echo "::error::$name/ exists but isn't wired into this" \
-                "workflow. Add it to detect-frontend's paths-filter," \
-                "its own build-test/image-scanning/deploy jobs," \
-                "code-scanning's sonar sources, and both notify jobs" \
-                "before it can build/scan/deploy."
-              exit 1
+            missing=""
+            grep -q "^            [a-z-]*: '$name/\*\*'$" "$WF" \
+              || missing="$missing detect-frontend의-paths-filter"
+            grep -q "^        working-directory: $name$" "$WF" \
+              || missing="$missing build-test-job"
+            grep -q "^          context: $name$" "$WF" \
+              || missing="$missing image-scanning-job"
+            grep -q "^          add_source $name$" "$WF" \
+              || missing="$missing code-scanning의-sonar-sources"
+            if [ -n "$missing" ]; then
+              echo "::error::$name/ 이(가) 다음에 빠져 있습니다: $missing." \
+                "네 곳 모두에 배선해야 합니다 - 특히 sonar sources가 빠지면" \
+                "정적분석을 한 번도 안 거친 코드가 배포됩니다."
+              RC=1
             fi
           done
+          exit $RC
 
   # Node.js 22.15.0/npm 10.9.2 고정(프론트 인수 조건 명시값). tsc --noEmit 기반 typecheck를
   # lint로도 겸용한다(frontend/package.json 기준, 별도 ESLint 아직 미도입).
@@ -427,6 +462,16 @@ jobs:
       # 전부 ZeroCheck Launch Gate(기본 게이트로 지정 완료)를 물려받는다.
       - name: Determine sonar sources and project key
         id: sonar-sources
+        # 2026-07-24, 브랜치명을 run 스크립트 안에 직접 보간하던 것을 env로 옮긴다.
+        # `BRANCH="${{ github.head_ref }}"` 형태는 컨텍스트 값이 쉘 스크립트에
+        # 그대로 치환된 뒤 실행되는 구조라, 값에 따옴표나 명령치환이 들어가면
+        # 러너에서 임의 명령이 실행된다(브랜치 이름에는 큰따옴표가 들어갈 수 있다).
+        # 공식 하드닝 가이드가 지목하는 script injection 패턴이고, 권고 완화책이
+        # 정확히 "중간 환경변수를 거쳐라"이다:
+        # yamllint disable-line rule:line-length
+        # https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#understanding-the-risk-of-script-injections
+        env:
+          BRANCH_RAW: ${{ github.head_ref || github.ref_name }}
         #
         # 2026-07-24, frontend-admin 추가. 이 목록이 하드코딩이라, 새 앱을 여기
         # 안 넣으면 그 앱은 SonarQube 분석 대상에서 통째로 빠진다. 그런데
@@ -450,7 +495,7 @@ jobs:
           add_source backend
           echo "sources=$SOURCES" >> "$GITHUB_OUTPUT"
 
-          BRANCH="${{ github.head_ref || github.ref_name }}"
+          BRANCH="$BRANCH_RAW"
           if [ "$BRANCH" = "main" ]; then
             PROJECT_KEY="zerocheck"
           else
@@ -719,19 +764,58 @@ jobs:
           # 죽었다(product-service:5311c6b not found). --no-deps(공식: "Don't
           # start linked services")로 대상 서비스만 재생성한다 - 의존 서비스는
           # 이미 떠서 돌고 있으므로 건드릴 이유가 없다.
-          UPDATED=""
+          # 2026-07-24, 두 가지 결함을 함께 고친다.
+          #
+          # (1) pull 실패를 전부 "이번 커밋에 안 바뀐 서비스"로 취급하고 있었다.
+          #     원래 코드는 `docker pull ... >/dev/null 2>&1` 의 성공 여부만 봐서,
+          #     "그 태그가 없음"과 "인증 실패/네트워크 오류/레지스트리 다운"을
+          #     구분하지 못했다. Harbor의 dangdang-backend 프로젝트는 비공개이고
+          #     (public=false, 2026-07-24 확인), 이 job은 harbor.hizero.local로
+          #     로그인하는데 pull은 192.168.0.53으로 한다 - Docker는 자격증명을
+          #     레지스트리 호스트명 단위로 저장하므로(공식 문서: docker login이
+          #     "registry"별로 config.json에 기록), 두 이름이 갈린 지금 구성은
+          #     production VM에 남아있는 별도 로그인에 의존한다. 그게 만료되면
+          #     9개 서비스가 전부 "not rebuilt this commit"으로 조용히 스킵되고,
+          #     job은 초록불로 끝나며 notify-on-deploy는 "배포 완료"를 보낸다.
+          #     이제 pull 출력을 보고 "태그 없음"일 때만 스킵하고, 그 외 실패는
+          #     즉시 job을 실패시킨다.
+          #     (레지스트리 호스트명 통일은 compose의 image 참조까지 함께 바꿔야
+          #      해서 production 영향이 있음 - 별도 승인 항목으로 분리.)
+          #
+          # (2) 롤백 대상 목록이 루프가 끝난 뒤에야 기록됐다. 루프 도중 compose up이
+          #     실패하면(bash -e로 스텝이 즉시 종료) UPDATED_SERVICES가 아예 안
+          #     남아, 그 시점까지 이미 새 이미지로 교체된 서비스들이 롤백되지
+          #     않고 그대로 남았다. 매 서비스마다 파일에 append 해서, 스텝이
+          #     어디서 죽든 그때까지 배포된 목록이 보존되게 한다(GITHUB_ENV 대신
+          #     워크스페이스 파일 - 스텝 실패 시 환경파일 처리 시점에 의존하지
+          #     않기 위함).
+          UPDATED_FILE="$GITHUB_WORKSPACE/.updated-services"
+          : > "$UPDATED_FILE"
           for s in $SERVICES; do
             IMG="192.168.0.53/dangdang-backend/$s:$TAG"
-            if $SSH "docker pull $IMG" >/dev/null 2>&1; then
+            set +e
+            PULL_OUT=$($SSH "docker pull $IMG" 2>&1)
+            PULL_RC=$?
+            set -e
+            if [ "$PULL_RC" = "0" ]; then
               echo "$s: $TAG found in registry, deploying"
               $SSH "cd ~/backend && TAG=$TAG \
                 docker compose -f docker-compose.yaml up -d --no-deps $s"
-              UPDATED="$UPDATED $s"
-            else
+              echo "$s" >> "$UPDATED_FILE"
+            elif printf '%s' "$PULL_OUT" \
+                | grep -qiE 'manifest unknown|not found'; then
               echo "$s: $TAG not in registry (not rebuilt this commit)" \
                 "- leaving current deployment untouched"
+            else
+              echo "::error::$s: docker pull이 '태그 없음'이 아닌 이유로" \
+                "실패했습니다(인증/네트워크/레지스트리 장애 가능성)." \
+                "이 경우를 스킵으로 처리하면 아무것도 배포되지 않은 채" \
+                "배포 성공으로 보고됩니다. 원본 출력:"
+              printf '%s\n' "$PULL_OUT"
+              exit 1
             fi
           done
+          UPDATED=$(tr '\n' ' ' < "$UPDATED_FILE")
           echo "UPDATED_SERVICES=$UPDATED" >> "$GITHUB_ENV"
           if [ -z "$UPDATED" ]; then
             echo "No service had a new image for this commit; nothing to do"
@@ -780,7 +864,21 @@ jobs:
           # 기록해둔 이전 이미지(레지스트리/경로/태그 전체)에서 태그만
           # 떼어내 compose의 서비스 단위 up으로 되돌린다 - compose가 해당
           # 서비스에만 그 TAG를 적용하므로 다른 서비스는 영향받지 않는다.
-          for s in $UPDATED_SERVICES; do
+          #
+          # 2026-07-24, $UPDATED_SERVICES(환경변수) 대신 배포 스텝이 매 서비스마다
+          # append한 파일을 읽는다. 배포 스텝이 루프 중간에 죽은 경우 환경변수는
+          # 비어 있지만 그때까지 교체된 서비스는 실제로 존재하므로, 환경변수만
+          # 보면 그 서비스들이 롤백되지 않고 남는다(배포 스텝 주석 (2) 참고).
+          UPDATED_FILE="$GITHUB_WORKSPACE/.updated-services"
+          if [ -s "$UPDATED_FILE" ]; then
+            ROLLBACK_LIST=$(tr '\n' ' ' < "$UPDATED_FILE")
+          else
+            ROLLBACK_LIST="$UPDATED_SERVICES"
+          fi
+          if [ -z "$ROLLBACK_LIST" ]; then
+            echo "이번 실행에서 교체된 서비스가 없음 - 롤백할 대상 없음"
+          fi
+          for s in $ROLLBACK_LIST; do
             VAR="PREV_IMG_$s"
             PREV="${!VAR}"
             if [ -n "$PREV" ]; then
@@ -831,7 +929,10 @@ jobs:
     env:
       PROD_HOST: bruce@10.10.10.30
     steps:
-      - uses: actions/checkout@v4
+      # 2026-07-24, 이 파일에서 유일하게 남아있던 태그 핀을 SHA 핀으로 통일
+      # (나머지 스텝은 전부 SHA 핀이었는데 이 job만 어긋나 있었다).
+      # v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - name: Backup current b-gateway state
         env:
           SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
@@ -886,18 +987,31 @@ jobs:
               *) FAIL="1" ;;
             esac
           }
+          # 2026-07-24, 아래 두 POST 검증이 상태코드를 출력만 하고 FAIL 판정에
+          # 전혀 반영하지 않고 있었다. /b/admin은 이 게이트웨이에서 유일하게
+          # Lua 분기(menu 값에 따라 product-service / ingredients-service)를
+          # 타는 경로라 가장 깨지기 쉬운데, 정작 그 경로가 500이 나도 라우트
+          # 검증은 통과하고 자동 롤백도 안 걸렸다. 위 GET들과 같은 판정 로직을
+          # 태워 실제 게이트로 만든다.
+          check_post() {
+            label="$1"; menu="$2"
+            CMD="curl -s -X POST -H 'Content-Type: application/json'"
+            CMD="$CMD -d '{\"menu\":\"$menu\"}'"
+            CMD="$CMD -o /dev/null -w '%{http_code}'"
+            CMD="$CMD http://localhost:8080/b/admin"
+            CODE=$($SSH "$CMD" || echo "000")
+            echo "$label -> $CODE"
+            case "$CODE" in
+              2*|3*) : ;;
+              *) FAIL="1" ;;
+            esac
+          }
           check "http://localhost:8080/b/search?page=1"
           check "http://localhost:8080/b/recipes"
           check "http://localhost:8080/b/tags/category"
           check "http://localhost:8080/b/home/rank/item"
-          $SSH "curl -s -X POST -H 'Content-Type: application/json' \
-            -d '{\"menu\":\"product\"}' \
-            -o /dev/null -w '/b/admin (product) -> %{http_code}\n' \
-            http://localhost:8080/b/admin"
-          $SSH "curl -s -X POST -H 'Content-Type: application/json' \
-            -d '{\"menu\":\"create-tag\"}' \
-            -o /dev/null -w '/b/admin (create-tag) -> %{http_code}\n' \
-            http://localhost:8080/b/admin"
+          check_post "/b/admin (product)" "product"
+          check_post "/b/admin (create-tag)" "create-tag"
           $SSH "docker ps --filter name=b-gateway --format '{{.Status}}'"
           if [ -n "$FAIL" ]; then
             echo "One or more core routes failed"
@@ -909,6 +1023,18 @@ jobs:
           SSHPASS: ${{ secrets.PROD_VM_SSH_PASSWORD }}
         run: |
           SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
+          # 2026-07-24, BACKUP_TS가 비어 있는 경우를 막는다. 백업 스텝이
+          # 실패하면 이 변수가 없는 채로 롤백이 돌아 `cp ~/b-gateway-backup-/*`
+          # 라는 엉뚱한 경로를 복사하려 했다 - 실패는 하지만, 그때 이미
+          # `compose down`으로 게이트웨이를 내린 뒤라 전체 API가 죽은 상태로
+          # 남는다(b-gateway는 모든 /b/* 트래픽의 유일한 진입점).
+          # 백업이 없으면 내리지 말고 즉시 사람을 부른다.
+          if [ -z "$BACKUP_TS" ]; then
+            echo "::error::백업 타임스탬프가 없습니다(백업 스텝 실패 추정)." \
+              "복구할 원본이 없으므로 b-gateway를 내리지 않고 중단합니다." \
+              "production VM에서 수동 확인이 필요합니다."
+            exit 1
+          fi
           CMD="cd ~/b-gateway && docker compose -p backend down"
           CMD="$CMD && cp ~/b-gateway-backup-$BACKUP_TS/* ~/b-gateway/"
           CMD="$CMD && docker compose -p backend up -d"
@@ -1453,11 +1579,18 @@ jobs:
           ADMIN_SCAN_RESULT: ${{ needs.frontend-admin-image-scanning.result }}
           ADMIN_DEPLOY_RESULT: >-
             ${{ needs.frontend-admin-deploy-production.result }}
+          # 2026-07-24, 브랜치명 등 컨텍스트 값을 run 스크립트에 직접 보간하지 않고
+          # env를 거친다(code-scanning의 sonar-sources 스텝 주석에 근거/링크).
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          COMMIT_SHA: ${{ github.sha }}
+          BRANCH_RAW: ${{ github.ref_name }}
         run: |
-          REPO_URL="${{ github.server_url }}/${{ github.repository }}"
-          RUN_URL="$REPO_URL/actions/runs/${{ github.run_id }}"
-          SHA="${{ github.sha }}"
-          BRANCH="${{ github.ref_name }}"
+          REPO_URL="$SERVER_URL/$REPOSITORY"
+          RUN_URL="$REPO_URL/actions/runs/$RUN_ID"
+          SHA="$COMMIT_SHA"
+          BRANCH="$BRANCH_RAW"
           FAILED_JOBS=""
           add_failed() {
             if [ -z "$FAILED_JOBS" ]; then
@@ -1503,11 +1636,19 @@ jobs:
           if [ "$ADMIN_DEPLOY_RESULT" = "failure" ]; then
             add_failed "frontend-admin-deploy-production"
           fi
+          # 2026-07-24, JSON을 문자열 결합으로 만들던 것을 jq로 바꾼다. 기존
+          # `--data "{\"text\": \"$TEXT\"}"` 는 $TEXT에 큰따옴표나 역슬래시가
+          # 섞이면 JSON이 깨져 알람이 통째로 안 나간다 - 실패를 알리는 경로가
+          # 실패 내용 때문에 죽는 구조였다. 브랜치명에는 큰따옴표가 들어갈 수
+          # 있고(git이 ref에서 금지하는 문자에 " 는 없음), 이 알람은 하필
+          # 브랜치명을 본문에 넣는다. jq가 이스케이프를 책임지게 한다.
+          # (ubuntu-latest 러너에 jq 기본 포함 - 공식 러너 이미지 문서)
           TEXT=":x: *${FAILED_JOBS^}* failed on \`$BRANCH\` ($SHA)"
-          TEXT="$TEXT\n<$RUN_URL|결과 보기>"
+          TEXT="$TEXT"$'\n'"<$RUN_URL|결과 보기>"
+          jq -nc --arg t "$TEXT" '{text: $t}' > slack-payload.json
           curl -sf -X POST \
             -H 'Content-type: application/json' \
-            --data "{\"text\": \"$TEXT\"}" \
+            --data @slack-payload.json \
             "$SLACK_WEBHOOK_URL"
 
   # 2026-07-20, 배포 "성공" 알림. 그동안 실패만 Slack에 오고 성공 배포는
@@ -1545,20 +1686,28 @@ jobs:
           FRONTEND_R: ${{ needs.frontend-deploy-production.result }}
           ADMIN_R: ${{ needs.frontend-admin-deploy-production.result }}
           BGATEWAY_R: ${{ needs.bgateway-cutover.result }}
+          # notify-on-failure와 동일한 이유로 env 경유(2026-07-24).
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          COMMIT_SHA: ${{ github.sha }}
+          BRANCH_RAW: ${{ github.ref_name }}
         run: |
-          REPO_URL="${{ github.server_url }}/${{ github.repository }}"
-          RUN_URL="$REPO_URL/actions/runs/${{ github.run_id }}"
-          SHA_SHORT="$(echo '${{ github.sha }}' | cut -c1-8)"
+          REPO_URL="$SERVER_URL/$REPOSITORY"
+          RUN_URL="$REPO_URL/actions/runs/$RUN_ID"
+          SHA_SHORT="$(printf '%s' "$COMMIT_SHA" | cut -c1-8)"
           DEPLOYED=""
           add() { DEPLOYED="${DEPLOYED:+$DEPLOYED, }$1"; }
           [ "$BACKEND_R" = "success" ] && add "backend"
           [ "$FRONTEND_R" = "success" ] && add "frontend"
           [ "$ADMIN_R" = "success" ] && add "frontend-admin"
           [ "$BGATEWAY_R" = "success" ] && add "b-gateway"
+          # JSON 조립은 notify-on-failure와 동일하게 jq로(2026-07-24, 그쪽 주석 참고).
           TEXT=":white_check_mark: *$DEPLOYED* 프로덕션 배포 완료"
-          TEXT="$TEXT (\`${{ github.ref_name }}\` @ $SHA_SHORT)"
-          TEXT="$TEXT\n<$RUN_URL|실행 보기>"
+          TEXT="$TEXT (\`$BRANCH_RAW\` @ $SHA_SHORT)"
+          TEXT="$TEXT"$'\n'"<$RUN_URL|실행 보기>"
+          jq -nc --arg t "$TEXT" '{text: $t}' > slack-payload.json
           curl -sf -X POST \
             -H 'Content-type: application/json' \
-            --data "{\"text\": \"$TEXT\"}" \
+            --data @slack-payload.json \
             "$SLACK_WEBHOOK_URL"
