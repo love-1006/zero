@@ -44,48 +44,101 @@ jobs:
       # 컨테이너의 compose 라벨에서 배포 위치를 직접 읽어온다.
       # 그 위치를 저장소 경로로 매핑하는 표만 유지하면 되고, 표에 없는 스택이
       # 발견되면 "관리 밖"으로 보고한다(조용히 빠지지 않게).
+      # 2026-07-24 2차: 검사 범위를 harbor VM 밖으로 넓힌다.
+      # 1차 구현은 러너가 있는 harbor VM만 봤는데, 정작 이날 드리프트가 생긴
+      # cAdvisor는 harbor/production/DB 3곳에 배포돼 있어서 2곳이 깜깜했다.
+      # production/DB는 이미 있는 시크릿(PROD_VM_SSH_PASSWORD, DB_VM_SSH_PASSWORD)
+      # 으로 도달 가능하므로 추가 자격증명 없이 100% 커버가 된다.
+      # 읽기 전용(cat/docker inspect)이라 대상 VM에 영향이 없다.
+      #
+      # DB VM 계정명은 아직 워크플로에서 쓰인 적이 없어 미검증이다 - 접속 실패는
+      # job 실패가 아니라 UNREACHABLE 보고로 처리해서, 첫 실행이 실증 자료가
+      # 되게 한다(한 대가 안 닿는다고 나머지 점검이 죽으면 안 된다).
       - name: Compare deployed stacks against repo
         id: drift
+        env:
+          PROD_PW: ${{ secrets.PROD_VM_SSH_PASSWORD }}
+          DB_PW: ${{ secrets.DB_VM_SSH_PASSWORD }}
         run: |
-          # 배포위치|저장소경로
-          MAP="/home/bruce/cadvisor|infra/cadvisor/docker-compose.yml
-          /home/bruce/alloy|infra/alloy-logs/docker-compose.yml
-          /home/bruce/zero/infra/sonarqube|infra/sonarqube/docker-compose.yml"
+          # 배포 디렉터리의 basename -> 저장소 경로. VM마다 경로가 달라도
+          # basename 규약은 같아서, 절대경로 대신 이걸로 매핑한다.
+          MAP="cadvisor|infra/cadvisor/docker-compose.yml
+          alloy|infra/alloy-logs/docker-compose.yml
+          sonarqube|infra/sonarqube/docker-compose.yml
+          monitoring|infra/monitoring/docker-compose.yml"
+          # CI가 배포하는 스택 - 손으로 안 만지는 게 전제라 여기선 제외한다
+          # (b-gateway는 bgateway-cutover, backend/frontend류는 deploy job).
+          CI_MANAGED="backend frontend frontend-admin b-gateway"
           # Harbor 제품 자체 설치본은 이 저장소가 소유하지 않는다(./prepare가 생성).
-          EXTERNAL="/home/bruce/harbor"
+          EXTERNAL="harbor"
 
           strip() { grep -vE '^[[:space:]]*#|^[[:space:]]*$' "$1"; }
 
           REPORT=""
           add() { REPORT="${REPORT}${1}"$'\n'; }
 
-          LBL='com.docker.compose.project.working_dir'
-          DEPLOYED=$(docker ps --format '{{.Names}}' | while read -r c; do
-            docker inspect "$c" --format "{{index .Config.Labels \"$LBL\"}}"
-          done | grep -v '^$' | sort -u)
+          # 배포 위치 열거는 로컬/원격 모두 "같은 한 줄짜리 명령 문자열"을
+          # 실행한다. 원격에서 인자를 쪼개 넘기면 Go 템플릿의 큰따옴표를
+          # 원격 쉘이 한 번 더 벗겨내 템플릿이 깨진다 - 문자열째 넘겨서
+          # 원격 쉘이 딱 한 번만 파싱하게 한다.
+          WD='com.docker.compose.project.working_dir'
+          ENUM='docker ps --format "{{.Names}}" | while read -r c; do
+            docker inspect "$c" --format "{{index .Config.Labels \"'"$WD"'\"}}"
+            2>/dev/null; done | grep -v "^$" | sort -u'
+          ENUM=$(printf '%s' "$ENUM" | tr '\n' ' ')
 
-          for dir in $DEPLOYED; do
-            case "$EXTERNAL" in *"$dir"*) continue ;; esac
-            repo=$(printf '%s\n' "$MAP" | sed 's/^[[:space:]]*//' \
-              | awk -F'|' -v d="$dir" '$1==d {print $2}')
-            if [ -z "$repo" ]; then
-              add "UNMANAGED: $dir (저장소 매핑 없음 - 표에 추가 필요)"
-              continue
+          # $1=RUN 접두(빈 값이면 로컬), $2=명령 문자열
+          run_cmd() {
+            if [ -n "$1" ]; then $1 "$2"; else sh -c "$2"; fi
+          }
+
+          # $1=표시이름 $2=원격접속 접두(빈 값이면 로컬)
+          check_vm() {
+            vm="$1"; RUN="$2"
+            if [ -n "$RUN" ] && ! $RUN true >/dev/null 2>&1; then
+              add "UNREACHABLE: $vm (SSH 실패 - 계정/자격증명 확인 필요)"
+              return 0
             fi
-            if [ ! -f "$repo" ]; then
-              add "MISSING: $repo 가 저장소에 없음 (배포: $dir)"
-              continue
-            fi
-            live="$dir/docker-compose.yml"
-            if [ ! -f "$live" ]; then
-              add "MISSING: $live 를 읽을 수 없음"
-              continue
-            fi
-            if ! diff -q <(strip "$live") <(strip "$repo") >/dev/null; then
-              n=$(diff <(strip "$live") <(strip "$repo") | grep -c '^[<>]')
-              add "DRIFT: $live vs $repo (실질 차이 ${n}줄)"
-            fi
-          done
+            dirs=$(run_cmd "$RUN" "$ENUM" 2>/dev/null)
+            for dir in $dirs; do
+              name=$(basename "$dir")
+              case " $EXTERNAL " in *" $name "*) continue ;; esac
+              case " $CI_MANAGED " in *" $name "*) continue ;; esac
+              repo=$(printf '%s\n' "$MAP" | sed 's/^[[:space:]]*//' \
+                | awk -F'|' -v d="$name" '$1==d {print $2}')
+              if [ -z "$repo" ]; then
+                add "UNMANAGED: $vm:$dir (저장소 매핑 없음 - 표에 추가 필요)"
+                continue
+              fi
+              if [ ! -f "$repo" ]; then
+                add "MISSING: $repo 가 저장소에 없음 (배포: $vm:$dir)"
+                continue
+              fi
+              tmp="/tmp/drift-live.$$"
+              if ! run_cmd "$RUN" "cat '$dir/docker-compose.yml'" \
+                   > "$tmp" 2>/dev/null || [ ! -s "$tmp" ]; then
+                add "MISSING: $vm:$dir/docker-compose.yml 를 읽을 수 없음"
+                rm -f "$tmp"
+                continue
+              fi
+              if ! diff -q <(strip "$tmp") <(strip "$repo") >/dev/null; then
+                n=$(diff <(strip "$tmp") <(strip "$repo") | grep -c '^[<>]')
+                add "DRIFT: $vm:$dir vs $repo (실질 차이 ${n}줄)"
+              fi
+              rm -f "$tmp"
+            done
+          }
+
+          SSHOPT="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
+          check_vm "harbor" ""
+          # sshpass는 SSHPASS 환경변수를 읽는다(-p 인자 노출 회피, 기존
+          # build-test.yml 배포 job과 동일 방식). 함수 호출 앞 인라인 대입은
+          # 함수에 확실히 전달된다는 보장이 없어 export로 명시한다.
+          export SSHPASS="$PROD_PW"
+          check_vm "production" "sshpass -e ssh $SSHOPT bruce@10.10.10.30"
+          export SSHPASS="$DB_PW"
+          check_vm "db" "sshpass -e ssh $SSHOPT zero@10.10.20.10"
+          unset SSHPASS
 
           if [ -n "$REPORT" ]; then
             printf '%s\n' "$REPORT"
