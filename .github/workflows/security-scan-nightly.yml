@@ -42,6 +42,14 @@ jobs:
       # 한 이미지가 터져도 나머지를 끝까지 본다 - "무엇이 취약한지 전부"가
       # 필요하지, 첫 실패만 알면 다음 날 또 같은 자리에서 멈춘다.
       fail-fast: false
+      # 반드시 1이어야 한다. 이 job은 스캔하려고 이미지를 pull하는데,
+      # 병렬로 돌면 11개가 동시에 러너 디스크에 쌓인다. 2026-07-24 실측으로
+      # harbor VM 루트 파티션이 82% -> 94%까지 차서 "High Disk Usage"가
+      # 발화했고 여유가 4.2GB뿐이었다(러너 이미지 정리 미비, 별도 수정됨).
+      # 디스크가 차면 Harbor push가 실패해 파이프라인 전체가 멈추므로,
+      # "매일 밤 도는 검사"가 그 원인이 되어서는 안 된다. 순차 실행하면
+      # 아래 정리 스텝 덕분에 동시 적재량이 항상 이미지 1개로 유지된다.
+      max-parallel: 1
       matrix:
         # backend 9종은 build-test.yml의 SERVICES 목록과 같아야 한다.
         # 새 서비스를 추가하면 여기도 같이 넣을 것(그쪽 하드코딩 목록들과
@@ -72,6 +80,19 @@ jobs:
           USR='${{ secrets.HARBOR_ROBOT_USER }}'
           echo "$TOKEN" | docker login harbor.hizero.local \
             -u "$USR" --password-stdin
+      # pull 전에 여유를 확인하고, 부족하면 아무것도 받지 않고 멈춘다.
+      # 스캔을 못 하는 것보다 파이프라인을 멈추는 게 훨씬 비싸다 - 실패
+      # 메시지로 사람이 인지하게 하고, 디스크는 건드리지 않는다.
+      - name: Guard - 러너 디스크 여유 확인
+        run: |
+          AVAIL=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
+          echo "루트 파티션 여유: ${AVAIL}GB"
+          if [ "$AVAIL" -lt 10 ]; then
+            echo "::error::여유 ${AVAIL}GB로 부족해 이미지 pull을 중단합니다." \
+              "야간 스캔이 러너 디스크를 채워 파이프라인을 멈추는 것을 막기" \
+              "위한 가드입니다. 러너 디스크를 먼저 확보하세요."
+            exit 1
+          fi
       - name: Pull deployed image
         run: docker pull "harbor.hizero.local/${{ matrix.image }}:latest"
       # build-test.yml의 스캔 job들과 동일한 이유 - setup-trivy 기본 설치
