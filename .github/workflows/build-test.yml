@@ -503,6 +503,47 @@ jobs:
             PROJECT_KEY="zerocheck-branch-$SAFE_BRANCH"
           fi
           echo "project_key=$PROJECT_KEY" >> "$GITHUB_OUTPUT"
+      # 2026-07-24, 브랜치용 임시 프로젝트를 분석 전에 초기화한다.
+      #
+      # 문제: Community Edition에 브랜치 분석이 없어서 브랜치마다 별도 프로젝트
+      # (zerocheck-branch-<브랜치명>)를 쓰는데, 이 프로젝트에 분석이 2회 이상
+      # 쌓이면 "신규 코드"의 분모가 직전 분석 이후 변경분으로 확 줄어든다.
+      # 그러면 코드가 전혀 안 바뀌었는데도 비율 기반 조건이 터진다.
+      # 2026-07-24 PR #152 실측: 1차 분석은 통과했는데, 커밋을 하나 더 올린 뒤
+      # 2차 분석에서 new_lines=69 / new_duplicated_lines=15 ->
+      # new_duplicated_lines_density 21.7% > 3%로 Quality Gate 실패.
+      # 중복 자체는 frontend-admin/app/b/[...path]/route.ts(프론트 앱 두 개가
+      # 각자 갖는 프록시 라우트 보일러플레이트)로 main의 zerocheck 프로젝트에서는
+      # 같은 코드가 정상 통과한다 - 즉 코드 결함이 아니라 우회책의 부작용이다.
+      # 결과적으로 "PR에 커밋을 두 번 이상 올리면 게이트가 터진다"는, 재현되지만
+      # 아무도 원인을 모르는 실패가 만들어진다.
+      #
+      # 조치: 브랜치 프로젝트는 애초에 일회용이므로 분석 전에 지운다. 그러면 매
+      # 실행이 항상 "첫 분석"이 되어 브랜치의 전체 코드가 동일한 기준으로 평가된다
+      # (main의 zerocheck는 히스토리를 보존해야 하므로 건드리지 않는다).
+      # 덤으로 SonarQube에 죽은 브랜치 프로젝트가 무한히 쌓이는 것도 막는다.
+      # 게이트를 느슨하게 만드는 게 아니다 - 평가 대상이 "직전 push 이후 몇 줄"에서
+      # "이 브랜치 코드 전체"로 넓어지므로 오히려 더 엄격하다.
+      # 삭제 권한이 없거나 실패해도 분석 자체는 진행한다(경고만).
+      - name: Reset ephemeral branch project (non-main only)
+        if: steps.sonar-sources.outputs.project_key != 'zerocheck'
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+          PROJECT_KEY: ${{ steps.sonar-sources.outputs.project_key }}
+        run: |
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' -u "$SONAR_TOKEN:" \
+            -X POST "$SONAR_HOST_URL/api/projects/delete?project=$PROJECT_KEY" \
+            || echo "000")
+          case "$CODE" in
+            204) echo "브랜치 프로젝트 초기화 완료: $PROJECT_KEY" ;;
+            404) echo "브랜치 프로젝트 없음(첫 분석): $PROJECT_KEY" ;;
+            *)
+              echo "::warning::브랜치 프로젝트 초기화 실패(HTTP $CODE)." \
+                "분석은 계속하지만, 2회차 이상 분석이면 신규코드 분모 축소로" \
+                "Quality Gate가 오탐할 수 있음."
+              ;;
+          esac
       - name: SonarQube scan
         # v6
         uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602  # yamllint disable-line rule:line-length
@@ -1069,8 +1110,22 @@ jobs:
           # 전혀 반영하지 않고 있었다. /b/admin은 이 게이트웨이에서 유일하게
           # Lua 분기(menu 값에 따라 product-service / ingredients-service)를
           # 타는 경로라 가장 깨지기 쉬운데, 정작 그 경로가 500이 나도 라우트
-          # 검증은 통과하고 자동 롤백도 안 걸렸다. 위 GET들과 같은 판정 로직을
-          # 태워 실제 게이트로 만든다.
+          # 검증은 통과하고 자동 롤백도 안 걸렸다. 판정에 반영한다.
+          #
+          # 다만 판정 기준은 GET들과 달라야 한다. /b/admin은 인증이 필요한
+          # 관리자 API라 토큰 없이 호출하면 401이 정상이다(2026-07-24 프로덕션
+          # 실측: product/create-tag 두 분기 모두 401). 401은 "요청이 Lua 분기를
+          # 타고 백엔드까지 도달했고 앱이 인증 없음을 이유로 거부했다"는 뜻이라
+          # 라우팅이 정상이라는 증거다. 이걸 2xx/3xx 기준으로 판정하면 정상
+          # 상태에서 cutover가 실패하고 자동 롤백이 돌아, 게이트웨이만 두 번
+          # 재기동되고 배포는 영원히 성공하지 못한다(처음 이 검증을 강화할 때
+          # 이 점을 놓쳐서, 실제로 머지 전 사전점검에서 발견해 바로잡음).
+          #
+          # 따라서 라우팅 성공을 뜻하는 코드(2xx/3xx/401/403)는 통과시키고,
+          # 게이트웨이·업스트림 장애를 뜻하는 코드만 실패로 본다:
+          #   5xx  = 업스트림 오류 / Lua 분기 실패
+          #   000  = 연결 자체 실패(게이트웨이 다운)
+          #   404  = 라우트가 백엔드의 /admin에 안 붙음(설정 오류)
           check_post() {
             label="$1"; menu="$2"
             CMD="curl -s -X POST -H 'Content-Type: application/json'"
@@ -1080,7 +1135,7 @@ jobs:
             CODE=$($SSH "$CMD" || echo "000")
             echo "$label -> $CODE"
             case "$CODE" in
-              2*|3*) : ;;
+              2*|3*|401|403) : ;;
               *) FAIL="1" ;;
             esac
           }
@@ -1763,6 +1818,60 @@ jobs:
         run: |
           SSH="sshpass -e ssh -o StrictHostKeyChecking=accept-new $PROD_HOST"
           $SSH "echo $TAG > ~/frontend-admin/.last-deployed-tag"
+
+  # 2026-07-24, self-hosted 러너의 로컬 이미지 정리. 이게 없어서 실제로 디스크가
+  # 찼다 - 이날 harbor VM 루트 파티션이 82% -> 94%까지 올라 Grafana의
+  # "High Disk Usage"(>85%)가 06:50 UTC에 발화했고, 남은 여유가 4.2GB였다.
+  # 원인은 image-scanning job들이 매 실행마다 <이름>:<커밋SHA> 이미지를 러너에
+  # 남기는데 아무도 지우지 않는 것이었다(실측: SHA 태그 이미지 392개, 로컬 이미지
+  # 204개/24.9GB 중 15.2GB가 회수 가능). PR 하나당 약 280MB씩 영구 적재됐다.
+  # 디스크가 차면 Harbor push가 실패해 파이프라인 전체가 멈춘다.
+  #
+  # 태그 목록을 하드코딩하지 않고 "이번 실행의 SHA가 붙은 로컬 태그"를 통째로
+  # 지운다 - 이 저장소에서 반복된 실패 원인이 하드코딩 목록 누락이라, 새 이미지
+  # 태그가 추가돼도 자동으로 커버되는 방식을 택했다.
+  #
+  # 별도 job인 이유(각 image job 안에 넣지 않은 이유): backend는 서비스별 매트릭스라
+  # 9개가 같은 SHA로 병렬 실행된다. 각자 :<SHA> 패턴으로 지우면 먼저 끝난 job이
+  # 아직 스캔 중인 다른 서비스의 이미지를 지워버린다. 모든 image job이 끝난 뒤
+  # 한 번만 도는 게 안전하다.
+  #
+  # 두 번째 스텝은 안전망이다 - 취소/중단된 실행이 남긴 잔여물은 위 SHA 기준으로
+  # 안 잡히므로, 48시간 지난 미사용 이미지를 함께 정리한다(48h면 진행 중인 어떤
+  # 실행의 산출물도 대상이 아니다). 빌드 속도는 영향받지 않는다 - 캐시는 로컬
+  # 이미지가 아니라 Harbor registry 캐시(cache-from=type=registry)를 쓰고,
+  # 베이스 이미지도 build-push-action의 pull:true로 매번 새로 받는다.
+  runner-cleanup:
+    needs:
+      - backend-image-scanning
+      - frontend-image-scanning
+      - frontend-admin-image-scanning
+    if: always()
+    runs-on: self-hosted
+    steps:
+      - name: Remove this run's local build artifacts
+        env:
+          RUN_SHA: ${{ github.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          SHAS="$RUN_SHA"
+          if [ -n "$PR_HEAD_SHA" ] && [ "$PR_HEAD_SHA" != "$RUN_SHA" ]; then
+            SHAS="$SHAS $PR_HEAD_SHA"
+          fi
+          for s in $SHAS; do
+            docker images --format '{{.Repository}}:{{.Tag}}' \
+              | grep -E ":${s}$" \
+              | while read -r img; do
+                  docker image rm "$img" >/dev/null 2>&1 || true
+                done
+          done
+          echo "cleaned local tags for: $SHAS"
+      - name: Safety net - prune unused images older than 48h
+        run: |
+          docker image prune -a --force --filter until=48h >/dev/null 2>&1 \
+            || true
+          echo "--- runner disk after cleanup ---"
+          df -h / | tail -1
 
   # needs에 없는 job이 실패하면 GitHub 기본 동작상 그 job에 의존하는 하위 job들은
   # "실패"가 아니라 "스킵"으로 처리된다 - 그러면 이 job의 needs 안에 실제 실패가
